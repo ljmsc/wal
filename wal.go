@@ -51,6 +51,7 @@ func (c Config) Validate() error {
 /*
 TODO:
 	- compaction
+		* deletion
 	- versioning
 */
 
@@ -87,6 +88,24 @@ func Bootstrap(config Config) (Wal, error) {
 
 	if l.config.SegmentFilePrefix == "" {
 		l.config.SegmentFilePrefix = "seg"
+	}
+
+	l.config.SegmentFileDir = strings.TrimRight(l.config.SegmentFileDir, "/")
+
+	// check if dir exists
+	info, err := os.Stat(l.config.SegmentFileDir)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			return nil, err
+		}
+		// create the dir
+		if err := os.MkdirAll(l.config.SegmentFileDir, os.ModeDir|0700); err != nil {
+			return nil, err
+		}
+
+	} else if !info.IsDir() {
+		// file exists but is not a directory
+		return nil, errors.New("SegmentFileDir exists but is not a directory")
 	}
 
 	// scan segment dir for existing files

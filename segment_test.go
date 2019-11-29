@@ -61,8 +61,8 @@ func TestSegment_WriteReadRecords(t *testing.T) {
 	offsets := make([]int64, 0, loops)
 	for i := 0; i < loops; i++ {
 		record := Record{
-			Meta: RecordMetadata{
-				SequenceNumber: uint64(i + 1),
+			meta: RecordMetadata{
+				sequenceNumber: uint64(i + 1),
 			},
 			Key:  []byte(strconv.Itoa(i)),
 			Data: []byte("mydata"),
@@ -106,8 +106,8 @@ func TestSegment_OffsetsForKey(t *testing.T) {
 	loops := 10
 	for i := 0; i < loops; i++ {
 		record := Record{
-			Meta: RecordMetadata{
-				SequenceNumber: uint64(i + 1),
+			meta: RecordMetadata{
+				sequenceNumber: uint64(i + 1),
 			},
 			Key:  testkey,
 			Data: []byte("testdata" + strconv.FormatInt(rand.Int63(), 10)),

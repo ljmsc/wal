@@ -30,8 +30,8 @@ func TestRecord_FromBytes(t *testing.T) {
 		t.Fatalf("could not convert to record: %s", err.Error())
 	}
 
-	if r.Meta.SequenceNumber != sequenceNumber {
-		t.Fatalf("sequence number is not correct. got %d instead of %d", r.Meta.SequenceNumber, sequenceNumber)
+	if r.meta.sequenceNumber != sequenceNumber {
+		t.Fatalf("sequence number is not correct. got %d instead of %d", r.meta.sequenceNumber, sequenceNumber)
 	}
 
 	recordKey := string(r.Key)
@@ -48,8 +48,8 @@ func TestRecord_FromBytes(t *testing.T) {
 func TestRecord_ToBytes(t *testing.T) {
 	recordSize := 35
 	r := Record{
-		Meta: RecordMetadata{
-			SequenceNumber: 1,
+		meta: RecordMetadata{
+			sequenceNumber: 1,
 		},
 		Key:  []byte("42"),
 		Data: []byte("this is test data"),

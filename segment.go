@@ -159,7 +159,7 @@ func (s *segment) Write(record *Record) error {
 		return SegmentFileClosedErr
 	}
 
-	record.Meta.SequenceNumber = s.latestSeqNum + 1
+	record.meta.sequenceNumber = s.latestSeqNum + 1
 	if err := record.IsReadyToWrite(); err != nil {
 		s.mutex.RUnlock()
 		return err
@@ -190,8 +190,8 @@ func (s *segment) Write(record *Record) error {
 		s.keyOffsets[hash] = make([]int64, 0, s.config.SegmentIndexTableAlloc)
 	}
 	s.keyOffsets[hash] = append(s.keyOffsets[hash], s.writeOffset)
-	s.sequenceOffsets[record.Meta.SequenceNumber] = s.writeOffset
-	record.Meta.offset = s.writeOffset
+	s.sequenceOffsets[record.meta.sequenceNumber] = s.writeOffset
+	record.meta.offset = s.writeOffset
 	s.writeOffset = newWriteOffset
 	s.latestSeqNum += 1
 	return nil
@@ -276,16 +276,16 @@ func (s *segment) scan() error {
 			return err
 		}
 		if offset == 0 {
-			s.startSeqNum = record.Meta.SequenceNumber
+			s.startSeqNum = record.meta.sequenceNumber
 		}
-		s.latestSeqNum = record.Meta.SequenceNumber
+		s.latestSeqNum = record.meta.sequenceNumber
 		hash := record.Key.HashSum64()
 
 		if _, ok := s.keyOffsets[hash]; !ok {
 			s.keyOffsets[hash] = make([]int64, 0, 1)
 		}
 		s.keyOffsets[hash] = append(s.keyOffsets[hash], offset)
-		s.sequenceOffsets[record.Meta.SequenceNumber] = offset
+		s.sequenceOffsets[record.meta.sequenceNumber] = offset
 		offset = offset + record.Size()
 	}
 

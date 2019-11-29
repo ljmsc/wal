@@ -16,19 +16,21 @@ const (
 )
 
 type RecordMetadata struct {
-	SequenceNumber uint64
+	sequenceNumber uint64
 	offset         int64
 	size           int64
+
+	//todo: add version
 }
 
 type Record struct {
-	Meta RecordMetadata
+	meta RecordMetadata
 	Key  Key
 	Data []byte
 }
 
 func (r Record) IsReadyToWrite() error {
-	if r.Meta.SequenceNumber < 1 {
+	if r.meta.sequenceNumber < 1 {
 		return errors.New("currentSequenceNumber is zero")
 	}
 
@@ -44,9 +46,9 @@ func (r *Record) FromBytes(recordBytes []byte) error {
 	if len(recordBytes) < minimalSize {
 		return NotEnoughBytesErr
 	}
-	r.Meta.size = int64(len(recordBytes))
+	r.meta.size = int64(len(recordBytes))
 
-	r.Meta.SequenceNumber = binary.BigEndian.Uint64(recordBytes[:lengthOfSequenceNumberField])
+	r.meta.sequenceNumber = binary.BigEndian.Uint64(recordBytes[:lengthOfSequenceNumberField])
 	recordBytes = recordBytes[lengthOfSequenceNumberField:]
 
 	lengthOfKey := binary.BigEndian.Uint64(recordBytes[:lengthOfKeyLengthField])
@@ -62,10 +64,10 @@ func (r *Record) FromBytes(recordBytes []byte) error {
 
 // ToBytes converts the record to a byte slice
 func (r *Record) ToBytes() []byte {
-	recordBytes := make([]byte, 0, r.Meta.size)
+	recordBytes := make([]byte, 0, r.meta.size)
 
 	sequenceNumberBytes := make([]byte, lengthOfSequenceNumberField)
-	binary.BigEndian.PutUint64(sequenceNumberBytes, r.Meta.SequenceNumber)
+	binary.BigEndian.PutUint64(sequenceNumberBytes, r.meta.sequenceNumber)
 	recordBytes = append(recordBytes, sequenceNumberBytes...)
 
 	keyLengthBytes := make([]byte, lengthOfKeyLengthField)
@@ -74,15 +76,19 @@ func (r *Record) ToBytes() []byte {
 	recordBytes = append(recordBytes, r.Key...)
 	recordBytes = append(recordBytes, r.Data...)
 
-	r.Meta.size = int64(len(recordBytes))
+	r.meta.size = int64(len(recordBytes))
 	return recordBytes
 }
 
 // Size returns the size of the record in bytes
 func (r Record) Size() int64 {
-	return r.Meta.size
+	return r.meta.size
 }
 
 func (r Record) Offset() int64 {
-	return r.Meta.offset
+	return r.meta.offset
+}
+
+func (r Record) SequenceNumber() uint64 {
+	return r.meta.sequenceNumber
 }

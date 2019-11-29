@@ -99,7 +99,7 @@ func TestWriteReadWalMultiSegment(t *testing.T) {
 				t.Errorf("wrong data. got %s instead of %s", string(record.Data), testData)
 			}
 		}
-		sequenceNum[key] = records[1].Meta.SequenceNumber
+		sequenceNum[key] = records[1].meta.sequenceNumber
 	}
 
 	for i := 0; i < records; i++ {
