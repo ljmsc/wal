@@ -15,6 +15,7 @@ const (
 	lengthOfRecordSizeField = 8
 )
 
+// Segment represents a file in the log.
 type Segment interface {
 	Num() uint64
 	SequenceBoundaries() (uint64, uint64)
@@ -142,7 +143,7 @@ func (s *segment) Offsets(key Key) (offsets []int64, err error) {
 	s.mutex.RLock()
 	defer s.mutex.RUnlock()
 	if _, ok := s.keyOffsets[hash]; !ok {
-		return offsets, NoRecordFoundErr
+		return offsets, ErrNoRecordFound
 	}
 	offsets = s.keyOffsets[hash]
 	return offsets, nil
@@ -156,11 +157,11 @@ func (s *segment) Write(record *Record) error {
 	s.mutex.RLock()
 	if s.closed {
 		s.mutex.RUnlock()
-		return SegmentFileClosedErr
+		return ErrSegmentFileClosed
 	}
 
 	record.meta.sequenceNumber = s.latestSeqNum + 1
-	if err := record.IsReadyToWrite(); err != nil {
+	if err := record.isReadyToWrite(); err != nil {
 		s.mutex.RUnlock()
 		return err
 	}
@@ -171,7 +172,7 @@ func (s *segment) Write(record *Record) error {
 	newWriteOffset := s.writeOffset + record.Size() + lengthOfRecordSizeField
 	if newWriteOffset > s.config.SegmentMaxSizeBytes {
 		s.closed = true
-		return SegmentFileClosedErr
+		return ErrSegmentFileClosed
 	}
 	recordSizeBytes := make([]byte, lengthOfRecordSizeField)
 	binary.BigEndian.PutUint64(recordSizeBytes, uint64(record.Size()))
@@ -193,7 +194,7 @@ func (s *segment) Write(record *Record) error {
 	s.sequenceOffsets[record.meta.sequenceNumber] = s.writeOffset
 	record.meta.offset = s.writeOffset
 	s.writeOffset = newWriteOffset
-	s.latestSeqNum += 1
+	s.latestSeqNum++
 	return nil
 }
 
@@ -218,28 +219,31 @@ func (s *segment) ReadSequenceNum(sequenceNum uint64, record *Record) error {
 	s.mutex.RLock()
 	defer s.mutex.RUnlock()
 	if _, ok := s.sequenceOffsets[sequenceNum]; !ok {
-		return NoRecordFoundErr
+		return ErrNoRecordFound
 	}
 	offset := s.sequenceOffsets[sequenceNum]
 	return s.ReadOffset(offset, record)
 }
 
+// ReadLatest .
 func (s *segment) ReadLatest(key Key, record *Record) error {
 	s.mutex.RLock()
 	hash := key.HashSum64()
 	if _, ok := s.keyOffsets[hash]; !ok {
 		s.mutex.RUnlock()
-		return NoRecordFoundErr
+		return ErrNoRecordFound
 	}
 	offset := s.keyOffsets[hash][len(s.keyOffsets[hash])-1]
 	s.mutex.RUnlock()
 	return s.ReadOffset(offset, record)
 }
 
+// IsWritable returns true if the segment is writable and false if not
 func (s *segment) IsWritable() bool {
 	return !s.closed
 }
 
+// CloseForWriting closes the segment for further writes
 func (s *segment) CloseForWriting() error {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()

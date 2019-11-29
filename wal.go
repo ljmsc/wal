@@ -11,15 +11,17 @@ import (
 	"sync"
 )
 
+// Key is the key of a record
 type Key []byte
 
+// HashSum64 .
 func (k Key) HashSum64() uint64 {
 	hash := fnv.New64a()
 	_, _ = hash.Write(k)
 	return hash.Sum64()
 }
 
-// config for a write ahead wal
+// Config for a write ahead wal
 type Config struct {
 	// max size of a segment file
 	// default = 100 MByte
@@ -41,6 +43,7 @@ type Config struct {
 	SegmentFilePrefix string
 }
 
+// Validate validates the config
 func (c Config) Validate() error {
 	if c.SegmentFileDir == "" {
 		return errors.New("segment file dir must be set")
@@ -55,7 +58,7 @@ TODO:
 	- versioning
 */
 
-// Wal
+// Wal .
 type Wal interface {
 	Write(record *Record) error
 	ReadLatest(key Key, record *Record) error
@@ -144,10 +147,10 @@ func (l *wal) Write(record *Record) error {
 	for {
 		segment := l.currentSegment()
 		err := segment.Write(record)
-		if err != nil && err != SegmentFileClosedErr {
+		if err != nil && err != ErrSegmentFileClosed {
 			return err
 		}
-		if err == SegmentFileClosedErr {
+		if err == ErrSegmentFileClosed {
 			if err := l.addSegment(); err != nil {
 				return err
 			}
@@ -167,7 +170,7 @@ func (l *wal) ReadLatest(key Key, record *Record) error {
 	for i := len(l.segments) - 1; i >= 0; i-- {
 		segment := l.segments[i]
 		err := segment.ReadLatest(key, record)
-		if err == NoRecordFoundErr {
+		if err == ErrNoRecordFound {
 			continue
 		}
 		if err != nil {
@@ -175,7 +178,7 @@ func (l *wal) ReadLatest(key Key, record *Record) error {
 		}
 		return nil
 	}
-	return NoRecordFoundErr
+	return ErrNoRecordFound
 }
 
 // ReadAll reads all versions of a record for a given key
@@ -189,7 +192,7 @@ func (l *wal) ReadAll(key Key) ([]Record, error) {
 	for _, segment := range l.segments {
 		offsets, err := segment.Offsets(key)
 		if err != nil {
-			if err != NoRecordFoundErr {
+			if err != ErrNoRecordFound {
 				return nil, err
 			}
 			continue
@@ -203,7 +206,7 @@ func (l *wal) ReadAll(key Key) ([]Record, error) {
 		}
 	}
 	if len(records) == 0 {
-		return records, NoRecordFoundErr
+		return records, ErrNoRecordFound
 	}
 	return records, nil
 }
@@ -294,7 +297,7 @@ func (l *wal) scan() error {
 		return err
 	}
 	if !info.IsDir() {
-		return errors.New(fmt.Sprintf("%s is not a directory", l.config.SegmentFileDir))
+		return fmt.Errorf("%s is not a directory", l.config.SegmentFileDir)
 	}
 
 	fileInfos, err := ioutil.ReadDir(l.config.SegmentFileDir)

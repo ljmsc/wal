@@ -1,5 +1,10 @@
-# WAL (Write ahead log)
+# WAL (Write ahead log) [![Go Report Card](https://goreportcard.com/badge/github.com/ljmsc/wal)](https://goreportcard.com/report/github.com/ljmsc/wal)
 wal is a write ahead log written in go.
+
+## Installation
+```
+go get -u github.com/ljmsc/wal
+```
 
 ## Example
 

@@ -15,6 +15,7 @@ const (
 	minimalSize = lengthOfKeyLengthField + lengthOfSequenceNumberField
 )
 
+// RecordMetadata contains metadata for the record.
 type RecordMetadata struct {
 	sequenceNumber uint64
 	offset         int64
@@ -23,13 +24,14 @@ type RecordMetadata struct {
 	//todo: add version
 }
 
+// Record represents a data entry from disk
 type Record struct {
 	meta RecordMetadata
 	Key  Key
 	Data []byte
 }
 
-func (r Record) IsReadyToWrite() error {
+func (r Record) isReadyToWrite() error {
 	if r.meta.sequenceNumber < 1 {
 		return errors.New("currentSequenceNumber is zero")
 	}
@@ -44,7 +46,7 @@ func (r Record) IsReadyToWrite() error {
 // FromBytes parses the given byte array to the record fields
 func (r *Record) FromBytes(recordBytes []byte) error {
 	if len(recordBytes) < minimalSize {
-		return NotEnoughBytesErr
+		return ErrNotEnoughBytes
 	}
 	r.meta.size = int64(len(recordBytes))
 
@@ -85,10 +87,12 @@ func (r Record) Size() int64 {
 	return r.meta.size
 }
 
+// Offset returns the offset of the record on disk
 func (r Record) Offset() int64 {
 	return r.meta.offset
 }
 
+// SequenceNumber returns the sequence number of the record in the log
 func (r Record) SequenceNumber() uint64 {
 	return r.meta.sequenceNumber
 }
