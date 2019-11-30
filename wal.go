@@ -21,13 +21,13 @@ func (k Key) HashSum64() uint64 {
 	return hash.Sum64()
 }
 
-// Config for a write ahead wal
+// Config for a write ahead DiskWal
 type Config struct {
-	// max size of a segment file
+	// max size of a segmentFile file
 	// default = 100 MByte
 	SegmentMaxSizeBytes int64
 
-	// path to segment files on disk. new segment files will be created here. existing segment files are read
+	// path to segmentFile files on disk. new segmentFile files will be created here. existing segmentFile files are read
 	SegmentFileDir string
 
 	// defines the initial size of the slice for a given key
@@ -38,7 +38,7 @@ type Config struct {
 	// default = 10
 	RecordCollectionSliceAlloc uint64
 
-	// prefix for each segment file. the full segment name is the prefix plus an increasing integer
+	// prefix for each segmentFile file. the full segmentFile name is the prefix plus an increasing integer
 	// default = "seg"
 	SegmentFilePrefix string
 }
@@ -46,7 +46,7 @@ type Config struct {
 // Validate validates the config
 func (c Config) Validate() error {
 	if c.SegmentFileDir == "" {
-		return errors.New("segment file dir must be set")
+		return errors.New("segmentFile file dir must be set")
 	}
 	return nil
 }
@@ -58,8 +58,9 @@ TODO:
 	- versioning
 */
 
-// Wal .
+// Wal is the interface for the write ahead log
 type Wal interface {
+	// Write data for a given key to the DiskWal
 	Write(record *Record) error
 	ReadLatest(key Key, record *Record) error
 	ReadAll(key Key) ([]Record, error)
@@ -69,13 +70,13 @@ type Wal interface {
 	Remove() error
 }
 
-// Bootstrap a wal. existing segment files are read. it is not safe to run Bootstrap on the same directory multiple times
+// Bootstrap a DiskWal. existing segmentFile files are read. it is not safe to run Bootstrap on the same directory multiple times
 func Bootstrap(config Config) (Wal, error) {
 	if err := config.Validate(); err != nil {
 		return nil, err
 	}
 
-	l := wal{
+	l := DiskWal{
 		config: config,
 		mutex:  sync.RWMutex{},
 	}
@@ -111,7 +112,7 @@ func Bootstrap(config Config) (Wal, error) {
 		return nil, errors.New("SegmentFileDir exists but is not a directory")
 	}
 
-	// scan segment dir for existing files
+	// scan segmentFile dir for existing files
 	if err := l.scan(); err != nil {
 		_ = l.Close()
 		return nil, err
@@ -126,11 +127,12 @@ func Bootstrap(config Config) (Wal, error) {
 	return &l, nil
 }
 
-type wal struct {
-	// the wal configuration
+// DiskWal is the write ahead log implementation
+type DiskWal struct {
+	// the DiskWal configuration
 	config Config
-	// a list of segment files on disk
-	segments []Segment
+	// a list of segmentFile files on disk
+	segments []segment
 	// the mutex for the segments list to avoid concurrent writes
 	mutex sync.RWMutex
 	// the mutex to lock the write function
@@ -139,8 +141,8 @@ type wal struct {
 	consumers []chan Record
 }
 
-// Write data for a given key to the wal
-func (l *wal) Write(record *Record) error {
+// Write data for a given key to the DiskWal
+func (l *DiskWal) Write(record *Record) error {
 	l.writeMutex.Lock()
 	defer l.writeMutex.Unlock()
 	//todo: add versions for record
@@ -164,7 +166,7 @@ func (l *wal) Write(record *Record) error {
 }
 
 // ReadLatest reads the latest version of a record for a given key
-func (l *wal) ReadLatest(key Key, record *Record) error {
+func (l *DiskWal) ReadLatest(key Key, record *Record) error {
 	l.mutex.RLock()
 	defer l.mutex.RUnlock()
 	for i := len(l.segments) - 1; i >= 0; i-- {
@@ -182,7 +184,7 @@ func (l *wal) ReadLatest(key Key, record *Record) error {
 }
 
 // ReadAll reads all versions of a record for a given key
-func (l *wal) ReadAll(key Key) ([]Record, error) {
+func (l *DiskWal) ReadAll(key Key) ([]Record, error) {
 	//todo: this is O(n^2). can we do better?
 	l.mutex.RLock()
 	defer l.mutex.RUnlock()
@@ -212,7 +214,7 @@ func (l *wal) ReadAll(key Key) ([]Record, error) {
 }
 
 // ReadSequenceNum reads a record by sequence number
-func (l *wal) ReadSequenceNum(sequenceNum uint64, record *Record) error {
+func (l *DiskWal) ReadSequenceNum(sequenceNum uint64, record *Record) error {
 	l.mutex.RLock()
 	defer l.mutex.RUnlock()
 	for _, segment := range l.segments {
@@ -230,7 +232,7 @@ func (l *wal) ReadSequenceNum(sequenceNum uint64, record *Record) error {
 
 // Delete will mark a record for deletion. this function will not delete all records but create a delete record.
 // with the next log compaction all entries will be deleted
-func (l *wal) Delete(key Key) error {
+func (l *DiskWal) Delete(key Key) error {
 	record := Record{
 		Key:  key,
 		Data: []byte{},
@@ -239,7 +241,7 @@ func (l *wal) Delete(key Key) error {
 }
 
 // Close will close all open file handler
-func (l *wal) Close() error {
+func (l *DiskWal) Close() error {
 	var err error
 	for _, segment := range l.segments {
 		err = segment.Close()
@@ -247,8 +249,8 @@ func (l *wal) Close() error {
 	return err
 }
 
-// Destroy deletes all segment file
-func (l *wal) Remove() error {
+// Destroy deletes all segmentFile file
+func (l *DiskWal) Remove() error {
 	for _, segment := range l.segments {
 		if err := segment.Remove(); err != nil {
 			return err
@@ -257,7 +259,7 @@ func (l *wal) Remove() error {
 	return nil
 }
 
-func (l *wal) currentSegment() Segment {
+func (l *DiskWal) currentSegment() segment {
 	l.mutex.RLock()
 	defer l.mutex.RUnlock()
 	if l.segments == nil {
@@ -271,7 +273,7 @@ func (l *wal) currentSegment() Segment {
 	return seg
 }
 
-func (l *wal) addSegment() error {
+func (l *DiskWal) addSegment() error {
 	currentSegment := l.currentSegment()
 	if currentSegment != nil && currentSegment.IsWritable() {
 		return nil
@@ -291,7 +293,7 @@ func (l *wal) addSegment() error {
 	return nil
 }
 
-func (l *wal) scan() error {
+func (l *DiskWal) scan() error {
 	info, err := os.Stat(l.config.SegmentFileDir)
 	if err != nil {
 		return err
@@ -320,7 +322,7 @@ func (l *wal) scan() error {
 	}
 
 	sort.Strings(segmentFilenames)
-	l.segments = make([]Segment, 0, len(segmentFilenames))
+	l.segments = make([]segment, 0, len(segmentFilenames))
 	i := 0
 	for _, filename := range segmentFilenames {
 		segment, err := parseSegment(filename, l.config)

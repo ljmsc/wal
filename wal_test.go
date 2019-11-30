@@ -21,7 +21,7 @@ func closingHelper(wal Wal) {
 
 func TestBootstrap(t *testing.T) {
 	wal, err := Bootstrap(Config{
-		SegmentFileDir: "./tmp/wal/",
+		SegmentFileDir: "./tmp/DiskWal/",
 	})
 
 	if err != nil {
@@ -29,14 +29,14 @@ func TestBootstrap(t *testing.T) {
 	}
 
 	if err := wal.Remove(); err != nil {
-		t.Fatalf("can't close wal - %v", err)
+		t.Fatalf("can't close DiskWal - %v", err)
 	}
 }
 
 func TestWriteReadWal(t *testing.T) {
 	loops := 10
 	wal := bootstrapHelper(Config{
-		SegmentFileDir:    "./tmp/wal/",
+		SegmentFileDir:    "./tmp/DiskWal/",
 		SegmentFilePrefix: "seg_rw",
 	})
 	defer closingHelper(wal)
@@ -47,7 +47,7 @@ func TestWriteReadWal(t *testing.T) {
 			Data: []byte("this is awesome data"),
 		}
 		if err := wal.Write(&record); err != nil {
-			t.Errorf("can't write to wal - %v", err)
+			t.Errorf("can't write to DiskWal - %v", err)
 		}
 	}
 
@@ -55,7 +55,7 @@ func TestWriteReadWal(t *testing.T) {
 		record := Record{}
 		key := []byte("key:" + strconv.Itoa(i))
 		if err := wal.ReadLatest(key, &record); err != nil {
-			t.Errorf("can't read data from wal for key: '%s' - %v", key, err)
+			t.Errorf("can't read data from DiskWal for key: '%s' - %v", key, err)
 		}
 	}
 }
@@ -66,7 +66,7 @@ func TestWriteReadWalMultiSegment(t *testing.T) {
 	testData := "this is awesome test data"
 	wal := bootstrapHelper(Config{
 		SegmentMaxSizeBytes: 210,
-		SegmentFileDir:      "./tmp/wal/",
+		SegmentFileDir:      "./tmp/DiskWal/",
 		SegmentFilePrefix:   "mul_seg_rw",
 	})
 	defer closingHelper(wal)
@@ -78,7 +78,7 @@ func TestWriteReadWalMultiSegment(t *testing.T) {
 				Data: []byte(testData),
 			}
 			if err := wal.Write(&record); err != nil {
-				t.Errorf("can't write to wal - %v", err)
+				t.Errorf("can't write to DiskWal - %v", err)
 			}
 		}
 	}

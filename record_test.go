@@ -48,7 +48,7 @@ func TestRecord_FromBytes(t *testing.T) {
 func TestRecord_ToBytes(t *testing.T) {
 	recordSize := 35
 	r := Record{
-		meta: RecordMetadata{
+		meta: recordMetadata{
 			sequenceNumber: 1,
 		},
 		Key:  []byte("42"),

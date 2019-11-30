@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-func createHelper(prefix string) Segment {
+func createHelper(prefix string) segment {
 	s, e := createSegment(1, 1, Config{
 		SegmentMaxSizeBytes: 100e6,
 		SegmentFileDir:      "./tmp",
@@ -36,10 +36,10 @@ func TestCreateSegment(t *testing.T) {
 		SegmentFilePrefix:   "seg",
 	})
 	if e != nil {
-		t.Fatalf("can't create new segment - %v", e)
+		t.Fatalf("can't create new segmentFile - %v", e)
 	}
 	if err := s.Close(); err != nil {
-		t.Fatalf("couldn't close segment file - %v", err)
+		t.Fatalf("couldn't close segmentFile file - %v", err)
 	}
 
 	_, err := os.Stat(filePath)
@@ -48,7 +48,7 @@ func TestCreateSegment(t *testing.T) {
 	}
 
 	if err := os.Remove(filePath); err != nil {
-		t.Fatalf("couldn't remove test segment file - %v", err)
+		t.Fatalf("couldn't remove test segmentFile file - %v", err)
 	}
 }
 
@@ -61,7 +61,7 @@ func TestSegment_WriteReadRecords(t *testing.T) {
 	offsets := make([]int64, 0, loops)
 	for i := 0; i < loops; i++ {
 		record := Record{
-			meta: RecordMetadata{
+			meta: recordMetadata{
 				sequenceNumber: uint64(i + 1),
 			},
 			Key:  []byte(strconv.Itoa(i)),
@@ -69,7 +69,7 @@ func TestSegment_WriteReadRecords(t *testing.T) {
 		}
 
 		if err := s.Write(&record); err != nil {
-			t.Fatalf("couldn't write to segment file - %v", err)
+			t.Fatalf("couldn't write to segmentFile file - %v", err)
 		}
 		offsets = append(offsets, record.Offset())
 	}
@@ -106,7 +106,7 @@ func TestSegment_OffsetsForKey(t *testing.T) {
 	loops := 10
 	for i := 0; i < loops; i++ {
 		record := Record{
-			meta: RecordMetadata{
+			meta: recordMetadata{
 				sequenceNumber: uint64(i + 1),
 			},
 			Key:  testkey,

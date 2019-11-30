@@ -15,8 +15,8 @@ const (
 	minimalSize = lengthOfKeyLengthField + lengthOfSequenceNumberField
 )
 
-// RecordMetadata contains metadata for the record.
-type RecordMetadata struct {
+// recordMetadata contains metadata for the record.
+type recordMetadata struct {
 	sequenceNumber uint64
 	offset         int64
 	size           int64
@@ -26,7 +26,7 @@ type RecordMetadata struct {
 
 // Record represents a data entry from disk
 type Record struct {
-	meta RecordMetadata
+	meta recordMetadata
 	Key  Key
 	Data []byte
 }

@@ -15,8 +15,8 @@ const (
 	lengthOfRecordSizeField = 8
 )
 
-// Segment represents a file in the log.
-type Segment interface {
+// segment represents a file in the log.
+type segment interface {
 	Num() uint64
 	SequenceBoundaries() (uint64, uint64)
 	Offsets(key Key) (offsets []int64, err error)
@@ -30,12 +30,12 @@ type Segment interface {
 	Remove() error
 }
 
-// createSegment creates a new segment file
-func createSegment(segmentNumber uint64, startSeqNum uint64, config Config) (Segment, error) {
+// createSegment creates a new segmentFile file
+func createSegment(segmentNumber uint64, startSeqNum uint64, config Config) (segment, error) {
 	if startSeqNum < 1 {
 		return nil, errors.New("sequence number must be greater than zero")
 	}
-	s := segment{
+	s := segmentFile{
 		config:          config,
 		mutex:           sync.RWMutex{},
 		keyOffsets:      make(map[uint64][]int64),
@@ -51,7 +51,7 @@ func createSegment(segmentNumber uint64, startSeqNum uint64, config Config) (Seg
 	var err error
 	_, err = os.Stat(filename)
 	if err == nil {
-		return nil, errors.New("segment file already exists")
+		return nil, errors.New("segmentFile file already exists")
 	}
 
 	if !os.IsNotExist(err) {
@@ -65,9 +65,9 @@ func createSegment(segmentNumber uint64, startSeqNum uint64, config Config) (Seg
 	return &s, nil
 }
 
-// parseSegment parses a existing segment file on disk.
-func parseSegment(filename string, config Config) (Segment, error) {
-	s := segment{
+// parseSegment parses a existing segmentFile file on disk.
+func parseSegment(filename string, config Config) (segment, error) {
+	s := segmentFile{
 		config:          config,
 		mutex:           sync.RWMutex{},
 		keyOffsets:      make(map[uint64][]int64),
@@ -100,45 +100,46 @@ func parseSegment(filename string, config Config) (Segment, error) {
 	return &s, nil
 }
 
-type segment struct {
-	// the wal configuration
+// segmentFile .
+type segmentFile struct {
+	// the DiskWal configuration
 	config Config
 	// mutex to avoid concurrent writing
 	mutex sync.RWMutex
 	// mutex to lock the write function
 	writeMutex sync.Mutex
-	// the segment file on disk
+	// the segmentFile file on disk
 	file *os.File
-	// keyOffsets contains a list of all record positions (offsets) in the segment file for a given key
+	// keyOffsets contains a list of all record positions (offsets) in the segmentFile file for a given key
 	keyOffsets map[uint64][]int64
 	// sequenceOffsets contains a list of offsets for a given sequence number
 	sequenceOffsets map[uint64]int64
-	// write offset is the offset of the end of the segment file
+	// write offset is the offset of the end of the segmentFile file
 	writeOffset int64
-	// closed is false as long as the segment file is writable. if the file reaches the max segment size, closed is true
+	// closed is false as long as the segmentFile file is writable. if the file reaches the max segmentFile size, closed is true
 	closed bool
-	// the segment file number
+	// the segmentFile file number
 	number uint64
-	// the sequence number of the first record in the segment file
+	// the sequence number of the first record in the segmentFile file
 	startSeqNum uint64
-	// the  sequence number of the latest record in the segment file
+	// the  sequence number of the latest record in the segmentFile file
 	latestSeqNum uint64
 }
 
-// Num returns the segment file number
-func (s *segment) Num() uint64 {
+// Num returns the segmentFile file number
+func (s *segmentFile) Num() uint64 {
 	return s.number
 }
 
-// SequenceBoundaries returns the first and the latest sequence number in the segment file
-func (s *segment) SequenceBoundaries() (uint64, uint64) {
+// SequenceBoundaries returns the first and the latest sequence number in the segmentFile file
+func (s *segmentFile) SequenceBoundaries() (uint64, uint64) {
 	s.mutex.RLock()
 	defer s.mutex.RUnlock()
 	return s.startSeqNum, s.latestSeqNum
 }
 
 // Offsets writes all offset positions to offsets for a given key.
-func (s *segment) Offsets(key Key) (offsets []int64, err error) {
+func (s *segmentFile) Offsets(key Key) (offsets []int64, err error) {
 	hash := key.HashSum64()
 	s.mutex.RLock()
 	defer s.mutex.RUnlock()
@@ -150,7 +151,7 @@ func (s *segment) Offsets(key Key) (offsets []int64, err error) {
 }
 
 // Write writes the given record to disk and adds the offset to the record
-func (s *segment) Write(record *Record) error {
+func (s *segmentFile) Write(record *Record) error {
 	s.writeMutex.Lock()
 	defer s.writeMutex.Unlock()
 
@@ -198,8 +199,8 @@ func (s *segment) Write(record *Record) error {
 	return nil
 }
 
-// ReadOffset reads the record from the given offset from the segment file
-func (s *segment) ReadOffset(offset int64, record *Record) error {
+// ReadOffset reads the record from the given offset from the segmentFile file
+func (s *segmentFile) ReadOffset(offset int64, record *Record) error {
 	s.mutex.RLock()
 	defer s.mutex.RUnlock()
 	recordSizeBytes := make([]byte, lengthOfRecordSizeField)
@@ -215,7 +216,7 @@ func (s *segment) ReadOffset(offset int64, record *Record) error {
 }
 
 // ReadSequenceNum reads the record for a given sequence number
-func (s *segment) ReadSequenceNum(sequenceNum uint64, record *Record) error {
+func (s *segmentFile) ReadSequenceNum(sequenceNum uint64, record *Record) error {
 	s.mutex.RLock()
 	defer s.mutex.RUnlock()
 	if _, ok := s.sequenceOffsets[sequenceNum]; !ok {
@@ -226,7 +227,7 @@ func (s *segment) ReadSequenceNum(sequenceNum uint64, record *Record) error {
 }
 
 // ReadLatest .
-func (s *segment) ReadLatest(key Key, record *Record) error {
+func (s *segmentFile) ReadLatest(key Key, record *Record) error {
 	s.mutex.RLock()
 	hash := key.HashSum64()
 	if _, ok := s.keyOffsets[hash]; !ok {
@@ -238,26 +239,26 @@ func (s *segment) ReadLatest(key Key, record *Record) error {
 	return s.ReadOffset(offset, record)
 }
 
-// IsWritable returns true if the segment is writable and false if not
-func (s *segment) IsWritable() bool {
+// IsWritable returns true if the segmentFile is writable and false if not
+func (s *segmentFile) IsWritable() bool {
 	return !s.closed
 }
 
-// CloseForWriting closes the segment for further writes
-func (s *segment) CloseForWriting() error {
+// CloseForWriting closes the segmentFile for further writes
+func (s *segmentFile) CloseForWriting() error {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 	s.closed = true
 	return nil
 }
 
-// Close closes the open file handler to the segment file on disk
-func (s *segment) Close() error {
+// Close closes the open file handler to the segmentFile file on disk
+func (s *segmentFile) Close() error {
 	return s.file.Close()
 }
 
-// Remove deletes the segment file
-func (s *segment) Remove() error {
+// Remove deletes the segmentFile file
+func (s *segmentFile) Remove() error {
 	if err := s.Close(); err != nil {
 		return err
 	}
@@ -267,8 +268,8 @@ func (s *segment) Remove() error {
 	return nil
 }
 
-// scan scans the segment file for records. scan is not thread safe
-func (s *segment) scan() error {
+// scan scans the segmentFile file for records. scan is not thread safe
+func (s *segmentFile) scan() error {
 	var offset int64 = 0
 	for {
 		record := Record{}
@@ -297,7 +298,7 @@ func (s *segment) scan() error {
 	return nil
 }
 
-func (s *segment) parseNumber(filename string) error {
+func (s *segmentFile) parseNumber(filename string) error {
 	filename = filepath.Base(filename)
 	strNum := strings.Trim(filename, s.config.SegmentFilePrefix)
 	var err error

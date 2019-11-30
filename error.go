@@ -8,5 +8,5 @@ var (
 	// ErrNoRecordFound .
 	ErrNoRecordFound = errors.New("no record found")
 	// ErrSegmentFileClosed .
-	ErrSegmentFileClosed = errors.New("the segment file is closed")
+	ErrSegmentFileClosed = errors.New("the segmentFile file is closed")
 )
