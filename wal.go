@@ -139,12 +139,17 @@ type DiskWal struct {
 	writeMutex sync.Mutex
 	// a list of all consumers for record changes
 	consumers []chan Record
+	// closed is false until the Close() method is called
+	closed bool
 }
 
 // Write data for a given key to the DiskWal
 func (l *DiskWal) Write(record *Record) error {
 	l.writeMutex.Lock()
 	defer l.writeMutex.Unlock()
+	if l.closed {
+		return ErrWalClosed
+	}
 	//todo: add versions for record
 	for {
 		segment := l.currentSegment()
@@ -169,6 +174,9 @@ func (l *DiskWal) Write(record *Record) error {
 func (l *DiskWal) ReadLatest(key Key, record *Record) error {
 	l.mutex.RLock()
 	defer l.mutex.RUnlock()
+	if l.closed {
+		return ErrWalClosed
+	}
 	for i := len(l.segments) - 1; i >= 0; i-- {
 		segment := l.segments[i]
 		err := segment.ReadLatest(key, record)
@@ -188,6 +196,9 @@ func (l *DiskWal) ReadAll(key Key) ([]Record, error) {
 	//todo: this is O(n^2). can we do better?
 	l.mutex.RLock()
 	defer l.mutex.RUnlock()
+	if l.closed {
+		return nil, ErrWalClosed
+	}
 	segSize := len(l.segments)
 	size := uint64(segSize) * l.config.RecordCollectionSliceAlloc
 	records := make([]Record, 0, size)
@@ -217,6 +228,9 @@ func (l *DiskWal) ReadAll(key Key) ([]Record, error) {
 func (l *DiskWal) ReadSequenceNum(sequenceNum uint64, record *Record) error {
 	l.mutex.RLock()
 	defer l.mutex.RUnlock()
+	if l.closed {
+		return ErrWalClosed
+	}
 	for _, segment := range l.segments {
 		startSeqNum, endSeqNum := segment.SequenceBoundaries()
 		if startSeqNum > sequenceNum || endSeqNum < sequenceNum {
@@ -246,6 +260,9 @@ func (l *DiskWal) Close() error {
 	for _, segment := range l.segments {
 		err = segment.Close()
 	}
+	l.mutex.Lock()
+	defer l.mutex.Unlock()
+	l.closed = true
 	return err
 }
 

@@ -291,7 +291,7 @@ func (s *segmentFile) scan() error {
 		}
 		s.keyOffsets[hash] = append(s.keyOffsets[hash], offset)
 		s.sequenceOffsets[record.meta.sequenceNumber] = offset
-		offset = offset + record.Size()
+		offset = offset + record.Size() + lengthOfRecordSizeField
 	}
 
 	s.writeOffset = offset

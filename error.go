@@ -9,4 +9,6 @@ var (
 	ErrNoRecordFound = errors.New("no record found")
 	// ErrSegmentFileClosed .
 	ErrSegmentFileClosed = errors.New("the segmentFile file is closed")
+	// ErrWalClosed .
+	ErrWalClosed = errors.New("the wal is closed")
 )

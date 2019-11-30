@@ -14,6 +14,9 @@ func bootstrapHelper(config Config) Wal {
 }
 
 func closingHelper(wal Wal) {
+	if wal == nil {
+		return
+	}
 	if err := wal.Remove(); err != nil {
 		panic(err)
 	}
@@ -21,7 +24,7 @@ func closingHelper(wal Wal) {
 
 func TestBootstrap(t *testing.T) {
 	wal, err := Bootstrap(Config{
-		SegmentFileDir: "./tmp/DiskWal/",
+		SegmentFileDir: "./tmp/wal/",
 	})
 
 	if err != nil {
@@ -36,7 +39,7 @@ func TestBootstrap(t *testing.T) {
 func TestWriteReadWal(t *testing.T) {
 	loops := 10
 	wal := bootstrapHelper(Config{
-		SegmentFileDir:    "./tmp/DiskWal/",
+		SegmentFileDir:    "./tmp/wal/",
 		SegmentFilePrefix: "seg_rw",
 	})
 	defer closingHelper(wal)
@@ -66,7 +69,7 @@ func TestWriteReadWalMultiSegment(t *testing.T) {
 	testData := "this is awesome test data"
 	wal := bootstrapHelper(Config{
 		SegmentMaxSizeBytes: 210,
-		SegmentFileDir:      "./tmp/DiskWal/",
+		SegmentFileDir:      "./tmp/wal/",
 		SegmentFilePrefix:   "mul_seg_rw",
 	})
 	defer closingHelper(wal)
@@ -107,6 +110,44 @@ func TestWriteReadWalMultiSegment(t *testing.T) {
 		record := Record{}
 		if err := wal.ReadSequenceNum(sequenceNum[key], &record); err != nil {
 			t.Errorf("can't read record from sequence number %d - %v", sequenceNum[key], err)
+		}
+	}
+}
+
+func TestBootstrapExistingWal(t *testing.T) {
+	loops := 10
+	config := Config{
+		SegmentMaxSizeBytes: 210,
+		SegmentFileDir:      "./tmp/wal/",
+		SegmentFilePrefix:   "seg_exist",
+	}
+	wal := bootstrapHelper(config)
+
+	for i := 0; i < loops; i++ {
+		record := Record{
+			Key:  []byte("key:" + strconv.Itoa(i)),
+			Data: []byte("this is awesome data"),
+		}
+		if err := wal.Write(&record); err != nil {
+			t.Errorf("can't write to DiskWal - %v", err)
+		}
+	}
+
+	if err := wal.Close(); err != nil {
+		t.Fatalf("can't close wal - %v", err)
+	}
+
+	wal2, err := Bootstrap(config)
+	if err != nil {
+		t.Fatalf("can't bootstrap wal2 - %v", err)
+	}
+	defer closingHelper(wal2)
+
+	for i := 0; i < loops; i++ {
+		record := Record{}
+		key := []byte("key:" + strconv.Itoa(i))
+		if err := wal2.ReadLatest(key, &record); err != nil {
+			t.Errorf("can't read data from DiskWal for key: '%s' - %v", key, err)
 		}
 	}
 }
