@@ -1,9 +1,17 @@
 package wal
 
 import (
+	"os"
 	"strconv"
 	"testing"
 )
+
+func TestMain(m *testing.M) {
+	if err := os.MkdirAll("./tmp/wal/", os.ModeDir|0744); err != nil {
+		panic(err)
+	}
+	os.Exit(m.Run())
+}
 
 func bootstrapHelper(config Config) Wal {
 	wal, err := Bootstrap(config)
