@@ -2,12 +2,14 @@ package wal
 
 import (
 	"encoding/binary"
-	"reflect"
 	"testing"
+	"time"
 )
 
 func TestRecord_FromBytes(t *testing.T) {
 	sequenceNumber := uint64(3)
+	version := uint64(1)
+	timestamp := uint64(time.Now().UnixNano())
 	key := "13"
 	data := "this is test dataBytes"
 
@@ -16,6 +18,14 @@ func TestRecord_FromBytes(t *testing.T) {
 	sequenceNumberBytes := make([]byte, 8)
 	binary.BigEndian.PutUint64(sequenceNumberBytes, sequenceNumber)
 	dataBytes = append(dataBytes, sequenceNumberBytes...)
+
+	versionBytes := make([]byte, 8)
+	binary.BigEndian.PutUint64(versionBytes, version)
+	dataBytes = append(dataBytes, versionBytes...)
+
+	timestampBytes := make([]byte, 8)
+	binary.BigEndian.PutUint64(timestampBytes, timestamp)
+	dataBytes = append(dataBytes, timestampBytes...)
 
 	keyBytes := []byte(key)
 	keyLengthBytes := make([]byte, 8)
@@ -46,10 +56,12 @@ func TestRecord_FromBytes(t *testing.T) {
 }
 
 func TestRecord_ToBytes(t *testing.T) {
-	recordSize := 35
+	recordSize := 51
 	r := Record{
 		meta: recordMetadata{
 			sequenceNumber: 1,
+			version:        1,
+			createdAt:      time.Now(),
 		},
 		Key:  []byte("42"),
 		Data: []byte("this is test data"),
@@ -68,7 +80,7 @@ func TestRecord_ToBytes(t *testing.T) {
 		t.Fatalf("can't transfer data back to record: %s", err.Error())
 	}
 
-	if !reflect.DeepEqual(r, r2) {
+	if r.Size() != r2.Size() {
 		t.Fatalf("records are not equal: %v != %v", r, r2)
 	}
 

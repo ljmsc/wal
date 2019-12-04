@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 const (
@@ -19,6 +20,7 @@ const (
 type segment interface {
 	Num() uint64
 	SequenceBoundaries() (uint64, uint64)
+	RecordVersions() map[uint64]uint64
 	Offsets(key Key) (offsets []int64, err error)
 	Write(record *Record) error
 	ReadOffset(offset int64, record *Record) error
@@ -45,6 +47,7 @@ func createSegment(segmentNumber uint64, startSeqNum uint64, config Config) (seg
 		startSeqNum:     startSeqNum,
 		latestSeqNum:    startSeqNum - 1,
 		number:          segmentNumber,
+		versions:        make(map[uint64]uint64),
 	}
 	filename := config.SegmentFileDir + "/" + config.SegmentFilePrefix + strconv.FormatUint(segmentNumber, 10)
 
@@ -73,6 +76,7 @@ func parseSegment(filename string, config Config) (segment, error) {
 		keyOffsets:      make(map[uint64][]int64),
 		sequenceOffsets: make(map[uint64]int64),
 		closed:          false,
+		versions:        make(map[uint64]uint64),
 	}
 	if err := s.parseNumber(filename); err != nil {
 		return nil, err
@@ -108,22 +112,24 @@ type segmentFile struct {
 	mutex sync.RWMutex
 	// mutex to lock the write function
 	writeMutex sync.Mutex
-	// the segmentFile file on disk
+	// the segment file on disk
 	file *os.File
-	// keyOffsets contains a list of all record positions (offsets) in the segmentFile file for a given key
+	// keyOffsets contains a list of all record positions (offsets) in the segment file for a given key
 	keyOffsets map[uint64][]int64
 	// sequenceOffsets contains a list of offsets for a given sequence number
 	sequenceOffsets map[uint64]int64
-	// write offset is the offset of the end of the segmentFile file
+	// write offset is the offset of the end of the segment file
 	writeOffset int64
-	// closed is false as long as the segmentFile file is writable. if the file reaches the max segmentFile size, closed is true
+	// closed is false as long as the segment file is writable. if the file reaches the max segment size, closed is true
 	closed bool
-	// the segmentFile file number
+	// the segment file number
 	number uint64
-	// the sequence number of the first record in the segmentFile file
+	// the sequence number of the first record in the segment file
 	startSeqNum uint64
-	// the  sequence number of the latest record in the segmentFile file
+	// the  sequence number of the latest record in the segment file
 	latestSeqNum uint64
+	// versions stores the latest version for a given key (hash) in this segment file
+	versions map[uint64]uint64
 }
 
 // Num returns the segmentFile file number
@@ -131,11 +137,18 @@ func (s *segmentFile) Num() uint64 {
 	return s.number
 }
 
-// SequenceBoundaries returns the first and the latest sequence number in the segmentFile file
+// SequenceBoundaries returns the first and the latest sequence number in the segment file
 func (s *segmentFile) SequenceBoundaries() (uint64, uint64) {
 	s.mutex.RLock()
 	defer s.mutex.RUnlock()
 	return s.startSeqNum, s.latestSeqNum
+}
+
+// RecordVersions returns the highest version for all keys in this segment file
+func (s *segmentFile) RecordVersions() map[uint64]uint64 {
+	s.mutex.RLock()
+	defer s.mutex.RUnlock()
+	return s.versions
 }
 
 // Offsets writes all offset positions to offsets for a given key.
@@ -162,10 +175,21 @@ func (s *segmentFile) Write(record *Record) error {
 	}
 
 	record.meta.sequenceNumber = s.latestSeqNum + 1
+	if record.meta.createdAt.IsZero() {
+		record.meta.createdAt = time.Now()
+	}
+
 	if err := record.isReadyToWrite(); err != nil {
 		s.mutex.RUnlock()
 		return err
 	}
+	hash := record.Key.HashSum64()
+
+	if record.Version() <= s.versions[hash] {
+		s.mutex.RUnlock()
+		return errors.New("version already exists")
+	}
+
 	s.mutex.RUnlock()
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
@@ -186,12 +210,12 @@ func (s *segmentFile) Write(record *Record) error {
 	if err := s.file.Sync(); err != nil {
 		return err
 	}
-	hash := record.Key.HashSum64()
 
 	if _, ok := s.keyOffsets[hash]; !ok {
 		s.keyOffsets[hash] = make([]int64, 0, s.config.SegmentIndexTableAlloc)
 	}
 	s.keyOffsets[hash] = append(s.keyOffsets[hash], s.writeOffset)
+	s.versions[hash] = record.Version()
 	s.sequenceOffsets[record.meta.sequenceNumber] = s.writeOffset
 	record.meta.offset = s.writeOffset
 	s.writeOffset = newWriteOffset
@@ -289,6 +313,11 @@ func (s *segmentFile) scan() error {
 		if _, ok := s.keyOffsets[hash]; !ok {
 			s.keyOffsets[hash] = make([]int64, 0, 1)
 		}
+
+		if record.Version() > s.versions[hash] {
+			s.versions[hash] = record.Version()
+		}
+
 		s.keyOffsets[hash] = append(s.keyOffsets[hash], offset)
 		s.sequenceOffsets[record.meta.sequenceNumber] = offset
 		offset = offset + record.Size() + lengthOfRecordSizeField
