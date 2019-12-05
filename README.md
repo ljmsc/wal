@@ -5,6 +5,7 @@
 wal is a write ahead log written in go.
 
 ## Installation
+At least version `1.13` of go is required.
 ```
 go get -u github.com/ljmsc/wal
 ```
@@ -58,6 +59,18 @@ err := storage.ReadAll([]byte("my key"), &record)
 read the record for a given sequence number with `ReadSequenceNum()`
 ```go
 err := storage.ReadSequenceNum(sequenceNum, &record)
+```
+
+### write options
+
+write record
+```go
+err := storage.Write(&record)
+```
+
+write record to disk only if `version` is equal to current version on disk
+```go
+err := storage.CompareAndWrite(version, &record)
 ```
 
 ### remove log from disk
