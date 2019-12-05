@@ -61,6 +61,18 @@ read the record for a given sequence number with `ReadSequenceNum()`
 err := storage.ReadSequenceNum(sequenceNum, &record)
 ```
 
+### write options
+
+write record
+```go
+err := storage.Write(&record)
+```
+
+write record to disk only if `version` is equal to current version on disk
+```go
+err := storage.CompareAndWrite(version, &record)
+```
+
 ### remove log from disk
 `Remove()` will remove all files of the log
 ```go

@@ -4,6 +4,8 @@ import (
 	"os"
 	"strconv"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
 
 func TestMain(m *testing.M) {
@@ -68,6 +70,24 @@ func TestWriteReadWal(t *testing.T) {
 		if err := wal.ReadLatest(key, &record); err != nil {
 			t.Errorf("can't read data from DiskWal for key: '%s' - %v", key, err)
 		}
+
+		assert.Equal(t, uint64(1), record.Version(), "wrong version for record")
+	}
+
+	record := Record{Key: []byte("key:1")}
+	if err := wal.CompareAndWrite(1, &record); err != nil {
+		t.Errorf("can't write record via CompareAndWrite function: %v", err)
+	}
+
+	if err := wal.CompareAndWrite(5, &record); err == nil {
+		t.Errorf("write record with CompareAndWrite with wrong version")
+	}
+
+	for i := 0; i < loops; i++ {
+		key := []byte("key:" + strconv.Itoa(i))
+		if err := wal.Delete(key); err != nil {
+			t.Errorf("can't delete record with key: '%v' - %v", key, err)
+		}
 	}
 }
 
@@ -98,13 +118,11 @@ func TestWriteReadWalMultiSegment(t *testing.T) {
 	for i := 0; i < records; i++ {
 		key := "key:" + strconv.Itoa(i)
 		records, err := wal.ReadAll([]byte(key))
-		if err != nil {
-			t.Errorf("can't read all records for key: '%v' - %v", key, err)
-		}
 
-		if len(records) != 3 {
-			t.Errorf("not enough items for key: %v - only %d items", key, len(records))
-		}
+		assert.NoErrorf(t, err, "can't read all records for key: '%v'", key)
+
+		assert.Equalf(t, 3, len(records), "not enough items for key: %v - only %d items", key, len(records))
+
 		for _, record := range records {
 			if string(record.Data) != testData {
 				t.Errorf("wrong data. got %s instead of %s", string(record.Data), testData)
@@ -158,12 +176,4 @@ func TestBootstrapExistingWal(t *testing.T) {
 			t.Errorf("can't read data from DiskWal for key: '%s' - %v", key, err)
 		}
 	}
-}
-
-func TestRecordVersion(t *testing.T) {
-	//todo: impl when record versions are implemented
-}
-
-func TestDeleteRecords(t *testing.T) {
-	//todo: impl when log compaction is implemented
 }

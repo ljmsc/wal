@@ -105,6 +105,7 @@ TODO:
 type Wal interface {
 	// Write data for a given key to the DiskWal
 	Write(record *Record) error
+	CompareAndWrite(version uint64, record *Record) error
 	ReadLatest(key Key, record *Record) error
 	ReadAll(key Key) ([]Record, error)
 	ReadSequenceNum(sequenceNum uint64, record *Record) error
@@ -198,11 +199,13 @@ func (l *DiskWal) Write(record *Record) error {
 	}
 
 	keyHash := record.Key.HashSum64()
+	l.mutex.RLock()
 	if _, ok := l.versions[keyHash]; !ok {
 		l.versions[keyHash] = 0
 	}
-
 	record.meta.version = l.versions[keyHash] + 1
+	l.mutex.RUnlock()
+
 	for {
 		segment := l.currentSegment()
 		err := segment.Write(record)
@@ -219,9 +222,26 @@ func (l *DiskWal) Write(record *Record) error {
 			break
 		}
 	}
+
+	l.mutex.Lock()
 	// increase version if write was successful
 	l.versions[keyHash]++
+	l.mutex.Unlock()
 	return nil
+}
+
+// CompareAndWrite writes the data only if version is equal to the latest version on disk. if no record exists yet. version is ignored
+func (l *DiskWal) CompareAndWrite(version uint64, record *Record) error {
+	l.mutex.RLock()
+	keyHash := record.Key.HashSum64()
+	if currentVersion, ok := l.versions[keyHash]; ok {
+		if version != currentVersion {
+			l.mutex.RUnlock()
+			return errors.New("version is not equal to current version on disk")
+		}
+	}
+	l.mutex.RUnlock()
+	return l.Write(record)
 }
 
 // ReadLatest reads the latest version of a record for a given key
