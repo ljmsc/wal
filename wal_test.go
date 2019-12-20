@@ -201,7 +201,7 @@ func TestCompactionManually(t *testing.T) {
 	wal := bootstrapHelper(Config{
 		Compaction: CompactionConfig{
 			Trigger:    TriggerManually,
-			Strategy:   StrategyKeepLatest,
+			Strategy:   StrategyKeep,
 			KeepAmount: 1,
 		},
 		SegmentMaxSizeBytes: 210,
@@ -255,7 +255,7 @@ func TestCompactionTriggerTime(t *testing.T) {
 	wal := bootstrapHelper(Config{
 		Compaction: CompactionConfig{
 			Trigger:         TriggerTime,
-			Strategy:        StrategyKeepLatest,
+			Strategy:        StrategyKeep,
 			KeepAmount:      1,
 			TriggerInterval: time.Second,
 		},

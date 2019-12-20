@@ -17,8 +17,8 @@ const (
 type CompactionStrategyType int8
 
 const (
-	StrategyKeepLatest CompactionStrategyType = iota // At least the latest version for unique key will be kept
-	StrategyExpire                                   // all records which are older then time.Now - ExpirationThreshold will be deleted
+	StrategyKeep   CompactionStrategyType = iota // At least the latest version for unique key will be kept
+	StrategyExpire                               // all records which are older then time.Now - ExpirationThreshold will be deleted
 )
 
 type CompactionConfig struct {
@@ -33,7 +33,7 @@ type CompactionConfig struct {
 	// default = StrategyNone
 	Strategy CompactionStrategyType
 
-	// this is the amount of records per key which will be kept when compaction strategy is StrategyKeepLatest
+	// this is the amount of records per key which will be kept when compaction strategy is StrategyKeep
 	KeepAmount uint64
 
 	// all record which are older than time.Now - ExpirationThreshold will be deleted when compaction strategy is StrategyExpire
@@ -48,7 +48,7 @@ type compaction interface {
 func setupCompaction(config CompactionConfig, versions map[uint64]uint64, deletions map[uint64]bool) (compaction, error) {
 	var compaction compaction
 	switch config.Strategy {
-	case StrategyKeepLatest:
+	case StrategyKeep:
 		compaction = &StrategyKeepLatestCompaction{
 			config:    config,
 			versions:  versions,

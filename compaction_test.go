@@ -5,7 +5,7 @@ import "testing"
 func TestCompactionSetup(t *testing.T) {
 	comp, err := setupCompaction(CompactionConfig{
 		Trigger:    TriggerManually,
-		Strategy:   StrategyKeepLatest,
+		Strategy:   StrategyKeep,
 		KeepAmount: 1,
 	},
 		map[uint64]uint64{},
