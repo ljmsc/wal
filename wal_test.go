@@ -331,3 +331,67 @@ func TestCompactionStrategyExpire(t *testing.T) {
 		}
 	}
 }
+
+func TestRecordDeletionMarker(t *testing.T) {
+	records := 9
+	versions := 3
+	testData := "this is awesome test data"
+	wal := bootstrapHelper(Config{
+		Compaction: CompactionConfig{
+			Trigger:    TriggerManually,
+			Strategy:   StrategyKeep,
+			KeepAmount: 1,
+		},
+		SegmentMaxSizeBytes: 210,
+		SegmentFileDir:      "./tmp/wal/",
+		SegmentFilePrefix:   "seg_comp_rw",
+	})
+	defer closingHelper(wal)
+	writeHelper(wal, records, versions, testData)
+
+	for i := 0; i < records; i++ {
+		key := []byte("key:" + strconv.Itoa(i))
+		if err := wal.Delete(key); err != nil {
+			t.Errorf("can't delete key '%s' : %v", key, err)
+		}
+	}
+
+	if err := wal.Compact(); err != nil {
+		t.Fatalf("can't compact wal: %v", err)
+	}
+
+	for i := 0; i < records; i++ {
+		key := []byte("key:" + strconv.Itoa(i))
+		record := Record{}
+		if err := wal.ReadLatest(key, &record); err != nil {
+			if !errors.Is(err, ErrNoRecordFound) {
+				t.Errorf("can't read record for key '%s' : %v", key, err)
+			}
+		} else {
+			t.Errorf("found record for key '%s' : %v", key, record)
+		}
+
+		records, err := wal.ReadAll(key)
+		if err != nil {
+			if !errors.Is(err, ErrNoRecordFound) {
+				t.Errorf("can't read record for key '%s' : %v", key, err)
+			}
+		} else {
+			t.Errorf("result for key '%s' is not empty: %v", key, records)
+		}
+	}
+
+	writeHelper(wal, records, 1, testData)
+
+	for i := 0; i < records; i++ {
+		key := []byte("key:" + strconv.Itoa(i))
+		record := Record{}
+		if err := wal.ReadLatest(key, &record); err != nil {
+			t.Errorf("can't read record for key '%s' : %v", key, err)
+		}
+
+		if record.Version() < uint64(versions)+2 {
+			t.Errorf("wrong version for record. got %d instead if %d", record.Version(), versions+2)
+		}
+	}
+}

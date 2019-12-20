@@ -90,40 +90,36 @@ func (s *StrategyKeepLatestCompaction) Scan(segment segment) ([]int64, bool) {
 	seqFirst, seqLast := segment.SequenceBoundaries()
 	recordCount := seqLast - seqFirst
 
-	segVersions := segment.RecordVersions()
 	keepOffsets := make([]int64, 0, recordCount)
-	for hash, version := range segVersions {
-		if _, ok := s.deletions[hash]; ok {
-			// if record is marked for deletion no further checks are applied
+
+	for i := seqFirst; i <= seqLast; i++ {
+		record := Record{}
+		if err := segment.ReadSequenceNum(i, &record); err != nil {
 			continue
 		}
+
+		hash := record.Key.HashSum64()
 		if _, ok := s.versions[hash]; !ok {
 			// if record hash is unknown in global versions list the record can be deleted
 			continue
 		}
-		if version <= (s.versions[hash] - s.config.KeepAmount) {
-			// record version in this segment is old enough to delete
-			continue
+
+		latestRecordVersion := s.versions[hash]
+
+		// keep deletion marker if there are no newer records
+		if !record.DeletionMarker() && record.Version() < latestRecordVersion {
+			if _, ok := s.deletions[hash]; ok {
+				// if record is marked for deletion no further checks are applied
+				continue
+			}
+
+			if record.Version() <= (latestRecordVersion - s.config.KeepAmount) {
+				// record version in this segment is old enough to delete
+				continue
+			}
 		}
 
-		offsets, err := segment.OffsetsByHash(hash)
-		if err != nil {
-			// no offsets stores for record hash. this should not happen.
-			continue
-		}
-
-		// amount of offsets to keep from the offset list
-		offsetAmount := s.config.KeepAmount - (s.versions[hash] - version)
-		offsetLen := uint64(len(offsets))
-		if offsetLen < offsetAmount {
-			// if offset list is small than offsetAmount, keep all existing offsets
-			offsetAmount = offsetLen
-		}
-		startIndex := offsetLen - offsetAmount
-
-		for i := startIndex; i < offsetLen; i++ {
-			keepOffsets = append(keepOffsets, offsets[i])
-		}
+		keepOffsets = append(keepOffsets, record.Offset())
 	}
 
 	if (recordCount / 2) > uint64(len(keepOffsets)) {
@@ -163,12 +159,23 @@ func (s *StrategyExpireCompaction) Scan(segment segment) ([]int64, bool) {
 			continue
 		}
 
-		if record.CreatedAt().Before(compactTime) {
-			// record is older than (Now - ExpirationThreshold)
-			continue
+		// keep deletion marker
+		if !record.DeletionMarker() {
+			if record.CreatedAt().Before(compactTime) {
+				// record is older than (Now - ExpirationThreshold)
+				continue
+			}
+
+			if _, ok := s.deletions[record.Key.HashSum64()]; ok {
+				// if record is marked for deletion no further checks are applied
+				continue
+			}
 		}
+
 		keepOffsets = append(keepOffsets, record.Offset())
 	}
+
+	//todo: revert keepOffsets
 
 	if (recordCount / 2) > uint64(len(keepOffsets)) {
 		return keepOffsets, true
