@@ -1,9 +1,11 @@
 package wal
 
 import (
+	"errors"
 	"os"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -29,6 +31,20 @@ func closingHelper(wal Wal) {
 	}
 	if err := wal.Remove(); err != nil {
 		panic(err)
+	}
+}
+
+func writeHelper(wal Wal, records int, versions int, data string) {
+	for j := 0; j < versions; j++ {
+		for i := 0; i < records; i++ {
+			record := Record{
+				Key:  []byte("key:" + strconv.Itoa(i)),
+				Data: []byte(data),
+			}
+			if err := wal.Write(&record); err != nil {
+				panic(err)
+			}
+		}
 	}
 }
 
@@ -174,6 +190,144 @@ func TestBootstrapExistingWal(t *testing.T) {
 		key := []byte("key:" + strconv.Itoa(i))
 		if err := wal2.ReadLatest(key, &record); err != nil {
 			t.Errorf("can't read data from DiskWal for key: '%s' - %v", key, err)
+		}
+	}
+}
+
+func TestCompactionManually(t *testing.T) {
+	records := 9
+	versions := 3
+	testData := "this is awesome test data"
+	wal := bootstrapHelper(Config{
+		Compaction: CompactionConfig{
+			Trigger:    TriggerManually,
+			Strategy:   StrategyKeep,
+			KeepAmount: 1,
+		},
+		SegmentMaxSizeBytes: 210,
+		SegmentFileDir:      "./tmp/wal/",
+		SegmentFilePrefix:   "seg_comp_rw",
+	})
+	defer closingHelper(wal)
+	writeHelper(wal, records, versions, testData)
+
+	segAmount := wal.SegmentAmount()
+
+	if err := wal.Compact(); err != nil {
+		t.Fatalf("can't compact wal: %v", err)
+	}
+
+	if wal.SegmentAmount() >= segAmount {
+		t.Fatalf("to many segment files in wal after compaction: %d", wal.SegmentAmount())
+	}
+
+	for i := 0; i < records; i++ {
+		key := []byte("key:" + strconv.Itoa(i))
+		record := Record{}
+		if err := wal.ReadLatest(key, &record); err != nil {
+			t.Errorf("can't read record for key '%s' : %v", key, err)
+		}
+
+		if record.Version() < uint64(versions) {
+			t.Errorf("wrong version for record. got %d instead if %d", record.Version(), versions)
+		}
+	}
+
+	writeHelper(wal, records, 1, testData)
+
+	for i := 0; i < records; i++ {
+		key := []byte("key:" + strconv.Itoa(i))
+		record := Record{}
+		if err := wal.ReadLatest(key, &record); err != nil {
+			t.Errorf("can't read record for key '%s' : %v", key, err)
+		}
+
+		if record.Version() < uint64(versions)+1 {
+			t.Errorf("wrong version for record. got %d instead if %d", record.Version(), versions+1)
+		}
+	}
+}
+
+func TestCompactionTriggerTime(t *testing.T) {
+	records := 9
+	versions := 3
+	testData := "this is awesome test data"
+	wal := bootstrapHelper(Config{
+		Compaction: CompactionConfig{
+			Trigger:         TriggerTime,
+			Strategy:        StrategyKeep,
+			KeepAmount:      1,
+			TriggerInterval: time.Second,
+		},
+		SegmentMaxSizeBytes: 210,
+		SegmentFileDir:      "./tmp/wal/",
+		SegmentFilePrefix:   "seg_comp_rw",
+	})
+	defer closingHelper(wal)
+	writeHelper(wal, records, versions, testData)
+	segAmount := wal.SegmentAmount()
+	time.Sleep(time.Second)
+
+	if wal.SegmentAmount() >= segAmount {
+		t.Fatalf("to many segment files in wal after compaction: %d", wal.SegmentAmount())
+	}
+}
+
+func TestCompactionStrategyExpire(t *testing.T) {
+	records := 9
+	versions := 3
+	testData := "this is awesome test data"
+	wal := bootstrapHelper(Config{
+		Compaction: CompactionConfig{
+			Trigger:             TriggerManually,
+			Strategy:            StrategyExpire,
+			ExpirationThreshold: time.Second,
+		},
+		SegmentMaxSizeBytes: 210,
+		SegmentFileDir:      "./tmp/wal/",
+		SegmentFilePrefix:   "seg_comp_rw",
+	})
+	defer closingHelper(wal)
+	writeHelper(wal, records, versions, testData)
+	segAmount := wal.SegmentAmount()
+
+	time.Sleep(time.Second)
+	if err := wal.Compact(); err != nil {
+		t.Fatalf("can't compact wal: %v", err)
+	}
+
+	if wal.SegmentAmount() >= segAmount {
+		t.Fatalf("to many segment files in wal after compaction: %d", wal.SegmentAmount())
+	}
+
+	for i := 0; i < records; i++ {
+		key := []byte("key:" + strconv.Itoa(i))
+		record := Record{}
+		if err := wal.ReadLatest(key, &record); err != nil {
+			if !errors.Is(err, ErrNoRecordFound) {
+				t.Errorf("can't read record for key '%s' : %v", key, err)
+			}
+		}
+	}
+
+	if wal.SegmentAmount() > 1 {
+		t.Errorf("to many segment files: %d", wal.SegmentAmount())
+	}
+
+	writeHelper(wal, records, 1, testData)
+	if err := wal.Compact(); err != nil {
+		t.Fatalf("can't compact wal: %v", err)
+	}
+
+	for i := 0; i < records; i++ {
+		key := []byte("key:" + strconv.Itoa(i))
+		record := Record{}
+		if err := wal.ReadLatest(key, &record); err != nil {
+			t.Errorf("can't read record for key '%s' : %v", key, err)
+		}
+
+		if record.Version() < uint64(versions)+1 {
+			t.Errorf("wrong version for record. got %d instead if %d", record.Version(), versions+1)
 		}
 	}
 }

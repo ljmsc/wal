@@ -22,10 +22,13 @@ type segment interface {
 	SequenceBoundaries() (uint64, uint64)
 	RecordVersions() map[uint64]uint64
 	Offsets(key Key) (offsets []int64, err error)
+	OffsetsByHash(hash uint64) (offsets []int64, err error)
 	Write(record *Record) error
+	ReadHash(hash uint64, record *Record) error
 	ReadOffset(offset int64, record *Record) error
 	ReadSequenceNum(sequenceNum uint64, record *Record) error
 	ReadLatest(key Key, record *Record) error
+	FinishCompaction(segmentNumber uint64) error
 	IsWritable() bool
 	CloseForWriting() error
 	Close() error
@@ -48,6 +51,7 @@ func createSegment(segmentNumber uint64, startSeqNum uint64, config Config) (seg
 		latestSeqNum:    startSeqNum - 1,
 		number:          segmentNumber,
 		versions:        make(map[uint64]uint64),
+		deleteMarker:    make(map[uint64]bool),
 	}
 	filename := config.SegmentFileDir + "/" + config.SegmentFilePrefix + strconv.FormatUint(segmentNumber, 10)
 
@@ -68,6 +72,50 @@ func createSegment(segmentNumber uint64, startSeqNum uint64, config Config) (seg
 	return &s, nil
 }
 
+// createSegmentForCompaction
+func createSegmentForCompaction(tempSegmentNumber uint64, startSeqNum uint64, config Config) (segment, error) {
+	if startSeqNum < 1 {
+		return nil, errors.New("sequence number must be greater than zero")
+	}
+	s := segmentFile{
+		config:          config,
+		mutex:           sync.RWMutex{},
+		keyOffsets:      make(map[uint64][]int64),
+		sequenceOffsets: make(map[uint64]int64),
+		writeOffset:     0,
+		closed:          false,
+		startSeqNum:     startSeqNum,
+		latestSeqNum:    startSeqNum - 1,
+		number:          tempSegmentNumber,
+		versions:        make(map[uint64]uint64),
+		compaction:      true,
+		deleteMarker:    make(map[uint64]bool),
+	}
+	filename := config.SegmentFileDir + "/" + config.SegmentFilePrefix + strconv.FormatUint(tempSegmentNumber, 10) + "_c"
+
+	var err error
+	_, err = os.Stat(filename)
+	if err == nil {
+		return nil, errors.New("segmentFile file already exists")
+	}
+
+	if !os.IsNotExist(err) {
+		return nil, err
+	}
+
+	if s.file, err = os.OpenFile(filename, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0600); err != nil {
+		return nil, err
+	}
+
+	return &s, nil
+}
+
+// parseSegmentByNumber .
+func parseSegmentByNumber(segmentNumber uint64, config Config) (segment, error) {
+	filename := config.SegmentFileDir + "/" + config.SegmentFilePrefix + strconv.FormatUint(segmentNumber, 10)
+	return parseSegment(filename, config)
+}
+
 // parseSegment parses a existing segmentFile file on disk.
 func parseSegment(filename string, config Config) (segment, error) {
 	s := segmentFile{
@@ -77,6 +125,7 @@ func parseSegment(filename string, config Config) (segment, error) {
 		sequenceOffsets: make(map[uint64]int64),
 		closed:          false,
 		versions:        make(map[uint64]uint64),
+		deleteMarker:    make(map[uint64]bool),
 	}
 	if err := s.parseNumber(filename); err != nil {
 		return nil, err
@@ -116,7 +165,7 @@ type segmentFile struct {
 	file *os.File
 	// keyOffsets contains a list of all record positions (offsets) in the segment file for a given key
 	keyOffsets map[uint64][]int64
-	// sequenceOffsets contains a list of offsets for a given sequence number
+	// sequenceOffsets contains the offset for a given sequence number
 	sequenceOffsets map[uint64]int64
 	// write offset is the offset of the end of the segment file
 	writeOffset int64
@@ -130,6 +179,10 @@ type segmentFile struct {
 	latestSeqNum uint64
 	// versions stores the latest version for a given key (hash) in this segment file
 	versions map[uint64]uint64
+	// compaction is true if this segment file is created during a compaction and not yet aligned with the wal
+	compaction bool
+	// deleteMarker stores records with are marked for deletion
+	deleteMarker map[uint64]bool
 }
 
 // Num returns the segmentFile file number
@@ -153,7 +206,11 @@ func (s *segmentFile) RecordVersions() map[uint64]uint64 {
 
 // Offsets writes all offset positions to offsets for a given key.
 func (s *segmentFile) Offsets(key Key) (offsets []int64, err error) {
-	hash := key.HashSum64()
+	return s.OffsetsByHash(key.HashSum64())
+}
+
+// Offsets writes all offset positions to offsets for a given key.
+func (s *segmentFile) OffsetsByHash(hash uint64) (offsets []int64, err error) {
 	s.mutex.RLock()
 	defer s.mutex.RUnlock()
 	if _, ok := s.keyOffsets[hash]; !ok {
@@ -174,9 +231,12 @@ func (s *segmentFile) Write(record *Record) error {
 		return ErrSegmentFileClosed
 	}
 
-	record.meta.sequenceNumber = s.latestSeqNum + 1
-	if record.meta.createdAt.IsZero() {
-		record.meta.createdAt = time.Now()
+	if !s.compaction {
+		record.meta.sequenceNumber = s.latestSeqNum + 1
+
+		if record.meta.createdAt.IsZero() {
+			record.meta.createdAt = time.Now()
+		}
 	}
 
 	if err := record.isReadyToWrite(); err != nil {
@@ -214,13 +274,32 @@ func (s *segmentFile) Write(record *Record) error {
 	if _, ok := s.keyOffsets[hash]; !ok {
 		s.keyOffsets[hash] = make([]int64, 0, s.config.SegmentIndexTableAlloc)
 	}
+	// delete deletion marker if record itself is not a deletion
+	if len(record.Data) > 0 {
+		if _, ok := s.deleteMarker[hash]; ok {
+			delete(s.deleteMarker, hash)
+		}
+	} else {
+		s.deleteMarker[hash] = true
+	}
 	s.keyOffsets[hash] = append(s.keyOffsets[hash], s.writeOffset)
 	s.versions[hash] = record.Version()
 	s.sequenceOffsets[record.meta.sequenceNumber] = s.writeOffset
 	record.meta.offset = s.writeOffset
 	s.writeOffset = newWriteOffset
-	s.latestSeqNum++
+	s.latestSeqNum = record.meta.sequenceNumber
 	return nil
+}
+
+// ReadHash reads the record for a given key hash value
+func (s *segmentFile) ReadHash(hash uint64, record *Record) error {
+	s.mutex.RLock()
+	defer s.mutex.RUnlock()
+	if _, ok := s.keyOffsets[hash]; !ok {
+		return ErrNoRecordFound
+	}
+	offset := s.keyOffsets[hash][len(s.keyOffsets[hash])-1]
+	return s.ReadOffset(offset, record)
 }
 
 // ReadOffset reads the record from the given offset from the segmentFile file
@@ -252,15 +331,27 @@ func (s *segmentFile) ReadSequenceNum(sequenceNum uint64, record *Record) error 
 
 // ReadLatest .
 func (s *segmentFile) ReadLatest(key Key, record *Record) error {
-	s.mutex.RLock()
-	hash := key.HashSum64()
-	if _, ok := s.keyOffsets[hash]; !ok {
-		s.mutex.RUnlock()
-		return ErrNoRecordFound
+	return s.ReadHash(key.HashSum64(), record)
+}
+
+// FinishCompaction convert the segment file from a temp compaction file to a regular segment file.
+func (s *segmentFile) FinishCompaction(segmentNumber uint64) error {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+
+	if err := s.Close(); err != nil {
+		return err
 	}
-	offset := s.keyOffsets[hash][len(s.keyOffsets[hash])-1]
-	s.mutex.RUnlock()
-	return s.ReadOffset(offset, record)
+
+	oldName := s.config.SegmentFileDir + "/" + s.config.SegmentFilePrefix + strconv.FormatUint(s.number, 10) + "_c"
+	s.number = segmentNumber
+	newName := s.config.SegmentFileDir + "/" + s.config.SegmentFilePrefix + strconv.FormatUint(s.number, 10)
+
+	if err := os.Rename(oldName, newName); err != nil {
+		return err
+	}
+	s.compaction = false
+	return nil
 }
 
 // IsWritable returns true if the segmentFile is writable and false if not
@@ -316,6 +407,10 @@ func (s *segmentFile) scan() error {
 
 		if record.Version() > s.versions[hash] {
 			s.versions[hash] = record.Version()
+		}
+
+		if len(record.Data) <= 0 {
+			s.deleteMarker[hash] = true
 		}
 
 		s.keyOffsets[hash] = append(s.keyOffsets[hash], offset)

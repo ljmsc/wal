@@ -22,23 +22,6 @@ func (k Key) HashSum64() uint64 {
 	return hash.Sum64()
 }
 
-type CompactionTriggerType int8
-
-const (
-	TriggerNone = iota
-	TriggerManually
-	TriggerTime
-)
-
-type CompactionStrategyType int8
-
-const (
-	StrategyKeepLatest   = iota // the latest version for unique key will be kept
-	StrategyKeepN               // the latest N versions of a unique key will be kept
-	StrategyExpire              // all records which are older then time.Now + ExpirationThreshold will be deleted
-	StrategyExpireButOne        // same as StrategyExpire but one record for a unique key will be kept
-)
-
 // Config for a write ahead DiskWal
 type Config struct {
 	// max size of a segmentFile file
@@ -64,45 +47,18 @@ type Config struct {
 	Compaction CompactionConfig
 }
 
-type CompactionConfig struct {
-	// define how the log compaction should be triggered
-	// default = TriggerNone
-	Trigger CompactionTriggerType
-
-	// this is the compaction interval when compaction trigger is TriggerTime
-	TriggerInterval time.Duration
-
-	// define the strategy for log compaction
-	// default = StrategyNone
-	Strategy CompactionStrategyType
-
-	// this is the amount of records per key which will be kept when compaction strategy is StrategyKeepN
-	KeepAmount int32
-
-	//
-	ExpirationThreshold time.Duration
-}
-
 // Validate validates the config
 func (c Config) Validate() error {
 	if c.SegmentFileDir == "" {
 		return errors.New("segmentFile file dir must be set")
 	}
+
 	return nil
 }
 
-/*
-TODO:
-	- compaction
-		* deletion
-	- testing
-		* versioning
-		* creation date
-
-*/
-
 // Wal is the interface for the write ahead log
 type Wal interface {
+	SegmentAmount() uint64
 	// Write data for a given key to the DiskWal
 	Write(record *Record) error
 	CompareAndWrite(version uint64, record *Record) error
@@ -169,6 +125,25 @@ func Bootstrap(config Config) (Wal, error) {
 		}
 	}
 
+	// start ticker if compaction is time triggered
+	if config.Compaction.Trigger == TriggerTime {
+		ticker := time.NewTicker(config.Compaction.TriggerInterval)
+		go func() {
+			for range ticker.C {
+				if err := l.compact(); err != nil {
+					break
+				}
+				l.mutex.RLock()
+				closed := l.closed
+				l.mutex.RUnlock()
+				if closed {
+					ticker.Stop()
+					break
+				}
+			}
+		}()
+	}
+
 	return &l, nil
 }
 
@@ -188,6 +163,16 @@ type DiskWal struct {
 	closed bool
 	// versions stores the latest version for a given key (hash)
 	versions map[uint64]uint64
+	// the mutex to lock the compaction to avoid running multiple compaction processes
+	compactionMutex sync.Mutex
+	// deleteMarker stores records with are marked for deletion
+	deleteMarker map[uint64]bool
+}
+
+func (l *DiskWal) SegmentAmount() uint64 {
+	l.mutex.RLock()
+	defer l.mutex.RUnlock()
+	return uint64(len(l.segments))
 }
 
 // Write data for a given key to the DiskWal
@@ -248,6 +233,10 @@ func (l *DiskWal) CompareAndWrite(version uint64, record *Record) error {
 func (l *DiskWal) ReadLatest(key Key, record *Record) error {
 	l.mutex.RLock()
 	defer l.mutex.RUnlock()
+	if _, ok := l.versions[key.HashSum64()]; !ok {
+		return ErrNoRecordFound
+	}
+	latestVersion := l.versions[key.HashSum64()]
 	if l.closed {
 		return ErrWalClosed
 	}
@@ -260,6 +249,11 @@ func (l *DiskWal) ReadLatest(key Key, record *Record) error {
 		if err != nil {
 			return fmt.Errorf("could not read latest record for key %s: %w", key, err)
 		}
+
+		if record.Version() < latestVersion {
+			continue
+		}
+
 		return nil
 	}
 	return ErrNoRecordFound
@@ -319,15 +313,22 @@ func (l *DiskWal) ReadSequenceNum(sequenceNum uint64, record *Record) error {
 }
 
 func (l *DiskWal) Compact() error {
-	if l.config.Compaction.Trigger != TriggerManually {
+	switch l.config.Compaction.Trigger {
+	case TriggerManually:
+		return l.compact()
+	case TriggerNone:
+		return nil
+	default:
 		return errors.New("compaction trigger is not manually")
 	}
-	return l.compact()
 }
 
 // Delete will mark a record for deletion. this function will not delete all records but create a delete record.
 // with the next log compaction all entries will be deleted
 func (l *DiskWal) Delete(key Key) error {
+	l.mutex.Lock()
+	l.deleteMarker[key.HashSum64()] = true
+	l.mutex.Unlock()
 	record := Record{
 		Key:  key,
 		Data: []byte{},
@@ -376,6 +377,8 @@ func (l *DiskWal) addSegment() error {
 	if currentSegment != nil && currentSegment.IsWritable() {
 		return nil
 	}
+	l.mutex.Lock()
+	defer l.mutex.Unlock()
 	var segmentNum, latestSeqNum uint64
 	if currentSegment != nil {
 		segmentNum = currentSegment.Num()
@@ -385,13 +388,118 @@ func (l *DiskWal) addSegment() error {
 	if err != nil {
 		return err
 	}
-	l.mutex.Lock()
-	defer l.mutex.Unlock()
 	l.segments = append(l.segments, newSegment)
 	return nil
 }
 
 func (l *DiskWal) compact() error {
+	// first copy all necessary data to avoid long locking
+	l.mutex.RLock()
+	readOnlySegments := make([]segment, 0, len(l.segments))
+	for _, segment := range l.segments {
+		if segment.IsWritable() {
+			continue
+		}
+		readOnlySegments = append(readOnlySegments, segment)
+	}
+	currentVersions := make(map[uint64]uint64)
+	for hash, version := range l.versions {
+		currentVersions[hash] = version
+	}
+
+	currentDeletions := make(map[uint64]bool)
+	for hash := range l.deleteMarker {
+		currentDeletions[hash] = true
+	}
+	l.mutex.RUnlock()
+
+	l.compactionMutex.Lock()
+	defer l.compactionMutex.Unlock()
+
+	compactor, err := setupCompaction(l.config.Compaction, currentVersions, currentDeletions)
+	if err != nil {
+		return fmt.Errorf("can't setup compaction: %w", err)
+	}
+
+	var tempSegmentNum uint64 = 1
+	var currentCompactionSegment segment
+	compactionSegments := make([]segment, 0, len(readOnlySegments))
+	deletableSegments := make(map[uint64]segment)
+	for _, segment := range readOnlySegments {
+		keepOffsets, isCompactable := compactor.Scan(segment)
+		if !isCompactable {
+			continue
+		}
+		deletableSegments[segment.Num()] = segment
+		for _, offset := range keepOffsets {
+			record := Record{}
+			if err := segment.ReadOffset(offset, &record); err != nil {
+				return fmt.Errorf("can't read record from offset: %w", err)
+			}
+			for {
+				if currentCompactionSegment == nil {
+					currentCompactionSegment, err = createSegmentForCompaction(tempSegmentNum, record.SequenceNumber(), l.config)
+					if err != nil {
+						return fmt.Errorf("can't create compaction segment file: %w", err)
+					}
+				}
+				if err := currentCompactionSegment.Write(&record); err != nil {
+					if errors.Is(err, ErrSegmentFileClosed) {
+						// compaction segment file is closed.
+						compactionSegments = append(compactionSegments, currentCompactionSegment)
+						tempSegmentNum++
+						currentCompactionSegment = nil
+						continue
+					} else {
+						return fmt.Errorf("can't write record to segment: %w", err)
+					}
+				}
+				break
+			}
+		}
+	}
+
+	currentSegment := l.currentSegment()
+	l.mutex.Lock()
+	var segmentNum uint64 = 0
+	if currentSegment != nil {
+		segmentNum = currentSegment.Num()
+	}
+
+	for _, compSegment := range compactionSegments {
+		if err := compSegment.FinishCompaction(segmentNum + 1); err != nil {
+			l.mutex.Unlock()
+			return fmt.Errorf("can't convert compaction segment to regular segment: %w", err)
+		}
+		regularSegment, err := parseSegmentByNumber(segmentNum+1, l.config)
+		if err != nil {
+			l.mutex.Unlock()
+			return fmt.Errorf("can't parse new segment file by segment number: %w", err)
+		}
+		l.segments = append(l.segments, regularSegment)
+		segmentNum++
+	}
+	if currentSegment != nil {
+		if err := currentSegment.CloseForWriting(); err != nil {
+			l.mutex.Unlock()
+			return fmt.Errorf("can't close current write segment file: %w", err)
+		}
+	}
+
+	newSegmentsList := make([]segment, 0, len(l.segments))
+	for _, segment := range l.segments {
+		if _, ok := deletableSegments[segment.Num()]; !ok {
+			newSegmentsList = append(newSegmentsList, segment)
+		}
+	}
+	l.segments = newSegmentsList
+	l.mutex.Unlock()
+
+	for _, segment := range deletableSegments {
+		if err := segment.Remove(); err != nil {
+			return fmt.Errorf("can't remove old segment file: %w", err)
+		}
+	}
 
 	return nil
 }
@@ -427,6 +535,7 @@ func (l *DiskWal) scan() error {
 	sort.Strings(segmentFilenames)
 	l.segments = make([]segment, 0, len(segmentFilenames))
 	l.versions = make(map[uint64]uint64)
+	l.deleteMarker = make(map[uint64]bool)
 	i := 0
 	for _, filename := range segmentFilenames {
 		segment, err := parseSegment(filename, l.config)

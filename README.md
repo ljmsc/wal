@@ -10,9 +10,39 @@ At least version `1.13` of go is required.
 go get -u github.com/ljmsc/wal
 ```
 
-## Example
+## Compaction
+### Compaction trigger
+there are three different ways to trigger compaction:
+- no compaction at all `TriggerNone`
+- manual trigger `TriggerManually`
+- time trigger `TriggerTime`
 
-### basic usage
+### compaction strategies
+there are two different compaction strategies:  
+
+**Keep**  
+the `StrategyKeep` strategy keeps the latest n versions of a record.
+```go
+CompactionConfig{
+    Trigger:    TriggerManually,
+    Strategy:   StrategyKeep,
+    KeepAmount: 1,
+}
+```
+
+**Expire**  
+the `StrategyExpire` strategy remove all versions of a record which is older than `time.Now() - ExpirationThreshold`
+```go
+CompactionConfig{
+    Trigger:             TriggerManually,
+    Strategy:            StrategyExpire,
+    ExpirationThreshold: time.Second * 5,
+}
+```
+
+## Usage
+
+### basic
 ```go
 storage, err := wal.Bootstrap(wal.Config{SegmentFileDir: "./storage/"})
 if err != nil {
@@ -77,4 +107,23 @@ err := storage.CompareAndWrite(version, &record)
 `Remove()` will remove all files of the log
 ```go
 err := storage.Remove()
+```
+
+### compaction
+```go
+storage, err := wal.Bootstrap(
+	Config{
+		Compaction: CompactionConfig{
+			Trigger:             TriggerManually,
+			Strategy:            StrategyExpire,
+			ExpirationThreshold: time.Second,
+		},
+		SegmentFileDir:      "./storage/",
+	},
+	)
+...
+if err := storage.Compact(); err != nil {
+    // handle error 
+}
+...
 ```
