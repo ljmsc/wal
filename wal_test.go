@@ -281,7 +281,7 @@ func TestCompactionStrategyExpire(t *testing.T) {
 		Compaction: CompactionConfig{
 			Trigger:             TriggerManually,
 			Strategy:            StrategyExpire,
-			ExpirationThreshold: time.Second,
+			ExpirationThreshold: time.Second * 2,
 		},
 		SegmentMaxSizeBytes: 210,
 		SegmentFileDir:      "./tmp/wal/",
@@ -291,7 +291,7 @@ func TestCompactionStrategyExpire(t *testing.T) {
 	writeHelper(wal, records, versions, testData)
 	segAmount := wal.SegmentAmount()
 
-	time.Sleep(time.Second)
+	time.Sleep(time.Second * 2)
 	if err := wal.Compact(); err != nil {
 		t.Fatalf("can't compact wal: %v", err)
 	}
