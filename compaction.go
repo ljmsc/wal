@@ -9,9 +9,9 @@ import (
 type CompactionTriggerType int8
 
 const (
-	TriggerNone CompactionTriggerType = iota
-	TriggerManually
-	TriggerTime
+	TriggerNone     CompactionTriggerType = iota // no compaction at all
+	TriggerManually                              // compaction is manually triggered with the wal.Compact() function
+	TriggerTime                                  // compaction is triggered in time intervals
 )
 
 type CompactionStrategyType int8
@@ -33,10 +33,10 @@ type CompactionConfig struct {
 	// default = StrategyNone
 	Strategy CompactionStrategyType
 
-	// this is the amount of records per key which will be kept when compaction strategy is StrategyKeepN
+	// this is the amount of records per key which will be kept when compaction strategy is StrategyKeepLatest
 	KeepAmount uint64
 
-	//
+	// all record which are older than time.Now - ExpirationThreshold will be deleted when compaction strategy is StrategyExpire
 	ExpirationThreshold time.Duration
 }
 
@@ -149,6 +149,29 @@ func (s *StrategyExpireCompaction) Validate() error {
 }
 
 // Scan returns a list of offsets to keep and if more than half of the records in the segment can be deleted
-func (s *StrategyExpireCompaction) Scan(segment) ([]int64, bool) {
-	panic("todo impl")
+func (s *StrategyExpireCompaction) Scan(segment segment) ([]int64, bool) {
+	seqFirst, seqLast := segment.SequenceBoundaries()
+	recordCount := seqLast - seqFirst
+
+	compactTime := time.Now().Add(-s.config.ExpirationThreshold)
+
+	keepOffsets := make([]int64, 0, recordCount)
+
+	for i := seqLast; i >= seqFirst; i-- {
+		record := Record{}
+		if err := segment.ReadSequenceNum(i, &record); err != nil {
+			continue
+		}
+
+		if record.CreatedAt().Before(compactTime) {
+			// record is older than (Now - ExpirationThreshold)
+			continue
+		}
+		keepOffsets = append(keepOffsets, record.Offset())
+	}
+
+	if (recordCount / 2) > uint64(len(keepOffsets)) {
+		return keepOffsets, true
+	}
+	return keepOffsets, false
 }

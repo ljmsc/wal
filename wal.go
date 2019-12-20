@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 )
 
 // Key is the key of a record
@@ -54,14 +55,6 @@ func (c Config) Validate() error {
 
 	return nil
 }
-
-/*
-TODO:
-	- compaction
-		* deletion
-	- testing
-
-*/
 
 // Wal is the interface for the write ahead log
 type Wal interface {
@@ -130,6 +123,25 @@ func Bootstrap(config Config) (Wal, error) {
 		if err := l.addSegment(); err != nil {
 			return nil, err
 		}
+	}
+
+	// start ticker if compaction is time triggered
+	if config.Compaction.Trigger == TriggerTime {
+		ticker := time.NewTicker(config.Compaction.TriggerInterval)
+		go func() {
+			for range ticker.C {
+				if err := l.compact(); err != nil {
+					break
+				}
+				l.mutex.RLock()
+				closed := l.closed
+				l.mutex.RUnlock()
+				if closed {
+					ticker.Stop()
+					break
+				}
+			}
+		}()
 	}
 
 	return &l, nil
@@ -304,6 +316,8 @@ func (l *DiskWal) Compact() error {
 	switch l.config.Compaction.Trigger {
 	case TriggerManually:
 		return l.compact()
+	case TriggerNone:
+		return nil
 	default:
 		return errors.New("compaction trigger is not manually")
 	}
