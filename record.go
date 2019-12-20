@@ -135,3 +135,11 @@ func (r Record) Version() uint64 {
 func (r Record) CreatedAt() time.Time {
 	return r.meta.createdAt
 }
+
+// RecordDeletions returns true if record is a deletion record
+func (r Record) DeletionMarker() bool {
+	if len(r.Data) < 1 {
+		return true
+	}
+	return false
+}

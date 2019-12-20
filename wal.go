@@ -59,7 +59,6 @@ func (c Config) Validate() error {
 // Wal is the interface for the write ahead log
 type Wal interface {
 	SegmentAmount() uint64
-	// Write data for a given key to the DiskWal
 	Write(record *Record) error
 	CompareAndWrite(version uint64, record *Record) error
 	ReadLatest(key Key, record *Record) error
@@ -169,13 +168,14 @@ type DiskWal struct {
 	deleteMarker map[uint64]bool
 }
 
+// SegmentAmount returns the amount of segments in the wal
 func (l *DiskWal) SegmentAmount() uint64 {
 	l.mutex.RLock()
 	defer l.mutex.RUnlock()
 	return uint64(len(l.segments))
 }
 
-// Write data for a given key to the DiskWal
+// Write data for a given key to the wal
 func (l *DiskWal) Write(record *Record) error {
 	l.writeMutex.Lock()
 	defer l.writeMutex.Unlock()
@@ -312,6 +312,7 @@ func (l *DiskWal) ReadSequenceNum(sequenceNum uint64, record *Record) error {
 	return nil
 }
 
+// Compact triggers the compaction process
 func (l *DiskWal) Compact() error {
 	switch l.config.Compaction.Trigger {
 	case TriggerManually:
@@ -548,14 +549,21 @@ func (l *DiskWal) scan() error {
 			}
 		}
 		versions := segment.RecordVersions()
+		deletionMarker := segment.RecordDeletions()
 		for hash, version := range versions {
 			if _, ok := l.versions[hash]; !ok {
 				l.versions[hash] = 0
 			}
 			if l.versions[hash] < version {
 				l.versions[hash] = version
+				if _, ok := deletionMarker[hash]; ok {
+					l.deleteMarker[hash] = true
+				} else if _, ok := l.deleteMarker[hash]; ok {
+					delete(l.deleteMarker, hash)
+				}
 			}
 		}
+
 		l.segments = append(l.segments, segment)
 		i++
 	}

@@ -21,6 +21,7 @@ type segment interface {
 	Num() uint64
 	SequenceBoundaries() (uint64, uint64)
 	RecordVersions() map[uint64]uint64
+	RecordDeletions() map[uint64]bool
 	Offsets(key Key) (offsets []int64, err error)
 	OffsetsByHash(hash uint64) (offsets []int64, err error)
 	Write(record *Record) error
@@ -204,6 +205,12 @@ func (s *segmentFile) RecordVersions() map[uint64]uint64 {
 	return s.versions
 }
 
+func (s *segmentFile) RecordDeletions() map[uint64]bool {
+	s.mutex.RLock()
+	defer s.mutex.RUnlock()
+	return s.deleteMarker
+}
+
 // Offsets writes all offset positions to offsets for a given key.
 func (s *segmentFile) Offsets(key Key) (offsets []int64, err error) {
 	return s.OffsetsByHash(key.HashSum64())
@@ -315,7 +322,16 @@ func (s *segmentFile) ReadOffset(offset int64, record *Record) error {
 	if _, err := s.file.ReadAt(recordBytes, offset+lengthOfRecordSizeField); err != nil {
 		return err
 	}
-	return record.FromBytes(recordBytes)
+
+	if err := record.FromBytes(recordBytes); err != nil {
+		return err
+	}
+
+	if record.DeletionMarker() {
+		return ErrNoRecordFound
+	}
+
+	return nil
 }
 
 // ReadSequenceNum reads the record for a given sequence number
@@ -409,8 +425,10 @@ func (s *segmentFile) scan() error {
 			s.versions[hash] = record.Version()
 		}
 
-		if len(record.Data) <= 0 {
+		if len(record.Data) < 1 {
 			s.deleteMarker[hash] = true
+		} else if _, ok := s.deleteMarker[hash]; ok {
+			delete(s.deleteMarker, hash)
 		}
 
 		s.keyOffsets[hash] = append(s.keyOffsets[hash], offset)
