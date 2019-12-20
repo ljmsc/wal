@@ -382,6 +382,9 @@ func TestRecordDeletionMarker(t *testing.T) {
 	}
 
 	writeHelper(wal, records, 1, testData)
+	if err := wal.Compact(); err != nil {
+		t.Fatalf("can't compact wal: %v", err)
+	}
 
 	for i := 0; i < records; i++ {
 		key := []byte("key:" + strconv.Itoa(i))
