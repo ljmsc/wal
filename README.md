@@ -5,102 +5,65 @@
 wal is a write ahead log written in go.
 
 ## Installation
-At least version `1.13` of go is required.
+At least go version `1.13` is required.
 ```
 go get -u github.com/ljmsc/wal
-```
-
-## Compaction
-### Compaction trigger
-there are three different ways to trigger compaction:
-- no compaction at all `TriggerNone`
-- manual trigger `TriggerManually`
-- time trigger `TriggerTime`
-
-### compaction strategies
-there are two different compaction strategies:  
-
-**Keep**  
-the `StrategyKeep` strategy keeps the latest n versions of a record.
-```go
-CompactionConfig{
-    Trigger:    TriggerManually,
-    Strategy:   StrategyKeep,
-    KeepAmount: 1,
-}
-```
-
-**Expire**  
-the `StrategyExpire` strategy remove all versions of a record which is older than `time.Now() - ExpirationThreshold`
-```go
-CompactionConfig{
-    Trigger:             TriggerManually,
-    Strategy:            StrategyExpire,
-    ExpirationThreshold: time.Second * 5,
-}
 ```
 
 ## Usage
 
 ### basic
 ```go
-storage, err := wal.Bootstrap(wal.Config{SegmentFileDir: "./storage/"})
+storage, err := wal.Open("./path/to/wal", bucket.DefaultMaxPouchSize, nil)
 if err != nil {
+    // handle error
     panic(err)
 }
 defer storage.Close()
 
-// record to write
-record := wal.Record{
-    Key:  []byte("my key"),
-    Data: []byte("my data"),
-}
+foo := storage.CreateEntry([]byte("my_key"), []byte("my_data"))
 
-// write data to the storage
-if err := storage.Write(&record); err != nil {
+if err := storage.Write(foo); err != nil {
+    // handle write error
+    panic(err)
+}
+fmt.Printf("successful wrote entry. Sequence Number: %d Version: %d \n", foo.SequenceNumber(), foo.Version())
+
+bar := wal.Entry{}
+if err := storage.ReadByKey([]byte("my_key"), false, &bar); err != nil {
+    // handle error
     panic(err)
 }
 
-// after writing the record to disk the sequence number of the record in the storage and the offset on disk are available
-fmt.Printf("successful wrote record. Sequence Number: %d Offset: %d \n", record.SequenceNumber(), record.Offset())
-
-// clear the record
-record = wal.Record{}
-
-// read record from disk
-if err := storage.ReadLatest([]byte("my key"), &record); err != nil {
-    panic(err)
-}
-
-fmt.Printf("successful read record from disk with key: %s and value: %s \n", record.Key, record.Data)
+fmt.Printf("successful read entry from log with key: %s and value: %s \n", bar.Key, bar.Data)
 ```
 
 ### read options
-read the latest record for a given `key` with `ReadLatest()`
+read the latest entry for a given `key` with `ReadByKey()`
 ```go
-err := storage.ReadLatest([]byte("my key"), &record)
+err := storage.ReadByKey([]byte("my key"), false, &entry)
 ```
 
-read all records for a given `key` with `ReadAll()`
+read the entry for a given sequence number with `ReadBySequenceNumber()`
 ```go
-err := storage.ReadAll([]byte("my key"), &record)
+err := storage.ReadBySequenceNumber(sequenceNum, false, &entry)
 ```
 
-read the record for a given sequence number with `ReadSequenceNum()`
+read the entry for a given `key` and version with `ReadByKeyAndVersion()`
 ```go
-err := storage.ReadSequenceNum(sequenceNum, &record)
+err := storage.ReadByKeyAndVersion([]byte("my key"), 2, false, &entry)
 ```
 
 ### write options
 
-write record
+write entry
 ```go
-err := storage.Write(&record)
+err := storage.Write(&entry)
 ```
 
-write record to disk only if `version` is equal to current version on disk
+write entry to disk only if `version` is equal to current version on disk
 ```go
-err := storage.CompareAndWrite(version, &record)
+err := storage.CompareAndWrite(version, &entry)
 ```
 
 ### remove log from disk
@@ -109,21 +72,3 @@ err := storage.CompareAndWrite(version, &record)
 err := storage.Remove()
 ```
 
-### compaction
-```go
-storage, err := wal.Bootstrap(
-	Config{
-		Compaction: CompactionConfig{
-			Trigger:             TriggerManually,
-			Strategy:            StrategyExpire,
-			ExpirationThreshold: time.Second,
-		},
-		SegmentFileDir:      "./storage/",
-	},
-	)
-...
-if err := storage.Compact(); err != nil {
-    // handle error 
-}
-...
-```
