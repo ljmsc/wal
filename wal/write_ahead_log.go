@@ -28,14 +28,14 @@ func OpenWithHandler(name string, handler func(e Entry) error) (*Wal, error) {
 }
 
 // Open opens a new or existing wal
-func Open(name string, maxSegmentSize uint64, handler func(e Entry) error) (*Wal, error) {
+func Open(name string, maxFileSize uint64, handler func(e Entry) error) (*Wal, error) {
 	w := Wal{
 		latestVersions:       make(map[uint64]uint64),
 		keyVersionSeqNumbers: make(map[uint64]map[uint64]uint64),
 		dataMutex:            sync.RWMutex{},
 		closed:               false,
 	}
-	b, err := bucket.Open(name, maxSegmentSize, func(r bucket.Record) error {
+	b, err := bucket.Open(name, maxFileSize, func(r bucket.Record) error {
 		entry := Entry{}
 		if err := recordToEntry(r, &entry); err != nil {
 			return fmt.Errorf("can't convert record to entry: %w", err)

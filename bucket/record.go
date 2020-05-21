@@ -1,8 +1,6 @@
 package bucket
 
 import (
-	"encoding/binary"
-
 	"github.com/ljmsc/wal/pouch"
 )
 
@@ -21,10 +19,7 @@ func CreateRecord(key pouch.Key, data pouch.Data, metaRecords ...pouch.MetaRecor
 }
 
 func setSequenceNumber(seqNum uint64, r *Record) {
-	seqNumBytes := make([]byte, MetaSequenceNumberSize)
-	binary.PutUvarint(seqNumBytes, seqNum)
-
-	r.Metadata[SequenceNumberMetadataKey] = seqNumBytes
+	pouch.MetaPutUint64(SequenceNumberMetadataKey, seqNum, r.Metadata)
 }
 
 func toRecord(pr pouch.Record, r *Record) error {
@@ -49,13 +44,7 @@ func (r Record) Validate() error {
 }
 
 func (r Record) SequenceNumber() uint64 {
-	seqNumBytes := r.Metadata.Get(SequenceNumberMetadataKey)
-	if len(seqNumBytes) < 1 {
-		return 0
-	}
-
-	seqNum, _ := binary.Uvarint(seqNumBytes)
-	return seqNum
+	return r.Metadata.GetUint64(SequenceNumberMetadataKey)
 }
 
 // Envelope .

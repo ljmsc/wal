@@ -1,8 +1,6 @@
 package wal
 
 import (
-	"encoding/binary"
-
 	"github.com/ljmsc/wal/bucket"
 	"github.com/ljmsc/wal/pouch"
 )
@@ -22,9 +20,7 @@ func CreateEntry(key pouch.Key, data pouch.Data, metaRecords ...pouch.MetaRecord
 }
 
 func setVersion(version uint64, e *Entry) {
-	versionBytes := make([]byte, MetaVersionSize)
-	binary.PutUvarint(versionBytes, version)
-	e.Metadata[VersionMetadataKey] = versionBytes
+	pouch.MetaPutUint64(VersionMetadataKey, version, e.Metadata)
 }
 
 func recordToEntry(r bucket.Record, e *Entry) error {
@@ -49,13 +45,7 @@ func (e Entry) Validate() error {
 }
 
 func (r Entry) Version() uint64 {
-	versionBytes := r.Metadata.Get(VersionMetadataKey)
-	if len(versionBytes) < 1 {
-		return 0
-	}
-
-	version, _ := binary.Uvarint(versionBytes)
-	return version
+	return r.Metadata.GetUint64(VersionMetadataKey)
 }
 
 type Envelope struct {

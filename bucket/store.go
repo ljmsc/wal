@@ -45,7 +45,7 @@ func openStore(name string) (*store, error) {
 		if len(listBytes) < MetaNameSize {
 			break
 		}
-		nameSize, _ := binary.Uvarint(listBytes[:MetaNameSize])
+		nameSize := binary.LittleEndian.Uint64(listBytes[:MetaNameSize])
 		listBytes = listBytes[MetaNameSize:]
 
 		if uint64(len(listBytes)) < nameSize {
@@ -71,7 +71,7 @@ func (s *store) update(nameList []string) error {
 		nameSize := uint64(len(segmentNameBytes))
 
 		nameSizeBytes := make([]byte, MetaNameSize)
-		binary.PutUvarint(nameSizeBytes, nameSize)
+		binary.LittleEndian.PutUint64(nameSizeBytes, nameSize)
 
 		segmentListRecordData = append(segmentListRecordData, nameSizeBytes...)
 		segmentListRecordData = append(segmentListRecordData, segmentNameBytes...)
