@@ -12,6 +12,10 @@ const (
 	MetaMetadataItemCount         = 8
 	MetaMetadataItemNameSizeField = 8
 	MetaMetadataItemDataSizeField = 8
+
+	int64Bytes = 8
+	int32Bytes = 4
+	int16Bytes = 2
 )
 
 type MetaRecord struct {
@@ -26,14 +30,14 @@ func ParseMetadata(b []byte, m Metadata) error {
 	if len(b) < MetaMetadataItemCount {
 		return NotEnoughBytesErr
 	}
-	itemCount, _ := binary.Uvarint(b[:MetaMetadataItemCount])
+	itemCount := binary.LittleEndian.Uint64(b[:MetaMetadataItemCount])
 	b = b[MetaMetadataItemCount:]
 
 	for i := uint64(0); i < itemCount; i++ {
 		if len(b) < MetaMetadataItemNameSizeField {
 			return NotEnoughBytesErr
 		}
-		nameSize, _ := binary.Uvarint(b[:MetaMetadataItemNameSizeField])
+		nameSize := binary.LittleEndian.Uint64(b[:MetaMetadataItemNameSizeField])
 		b = b[MetaMetadataItemNameSizeField:]
 		itemName := string(b[:nameSize])
 		b = b[nameSize:]
@@ -41,7 +45,7 @@ func ParseMetadata(b []byte, m Metadata) error {
 		if len(b) < MetaMetadataItemDataSizeField {
 			return NotEnoughBytesErr
 		}
-		dataSize, _ := binary.Uvarint(b[:MetaMetadataItemDataSizeField])
+		dataSize := binary.LittleEndian.Uint64(b[:MetaMetadataItemDataSizeField])
 		b = b[MetaMetadataItemDataSizeField:]
 		itemData := b[:dataSize]
 		b = b[dataSize:]
@@ -54,15 +58,15 @@ func ParseMetadata(b []byte, m Metadata) error {
 	return nil
 }
 
-func (m Metadata) GetSize() int64 {
+func (m Metadata) GetSize() uint64 {
 	if len(m) == 0 {
 		return 0
 	}
 
-	dataSize := int64(0)
+	dataSize := uint64(0)
 	for name, data := range m {
-		dataSize += MetaMetadataItemNameSizeField + int64(len([]byte(name)))
-		dataSize += MetaMetadataItemDataSizeField + int64(len(data))
+		dataSize += MetaMetadataItemNameSizeField + uint64(len([]byte(name)))
+		dataSize += MetaMetadataItemDataSizeField + uint64(len(data))
 	}
 
 	return MetaMetadataItemCount + dataSize
@@ -76,7 +80,7 @@ func (m Metadata) Bytes() []byte {
 	metaBytes := make([]byte, 0, m.GetSize())
 
 	itemCountBytes := make([]byte, MetaMetadataItemCount)
-	binary.PutUvarint(itemCountBytes, uint64(len(m)))
+	binary.LittleEndian.PutUint64(itemCountBytes, uint64(len(m)))
 
 	metaBytes = append(metaBytes, itemCountBytes...)
 	keys := make([]string, 0, len(m))
@@ -89,10 +93,10 @@ func (m Metadata) Bytes() []byte {
 		data := m[name]
 		nameBytes := []byte(name)
 		nameSizeBytes := make([]byte, MetaMetadataItemNameSizeField)
-		binary.PutUvarint(nameSizeBytes, uint64(len(nameBytes)))
+		binary.LittleEndian.PutUint64(nameSizeBytes, uint64(len(nameBytes)))
 
 		dataSizeBytes := make([]byte, MetaMetadataItemDataSizeField)
-		binary.PutUvarint(dataSizeBytes, uint64(len(data)))
+		binary.LittleEndian.PutUint64(dataSizeBytes, uint64(len(data)))
 
 		metaBytes = append(metaBytes, nameSizeBytes...)
 		metaBytes = append(metaBytes, name...)
@@ -104,7 +108,45 @@ func (m Metadata) Bytes() []byte {
 
 func (m Metadata) Get(name string) []byte {
 	if _, ok := m[name]; !ok {
-		return []byte{}
+		return make([]byte, 8)
 	}
 	return m[name]
+}
+
+func (m Metadata) GetUint64(name string) uint64 {
+	return binary.LittleEndian.Uint64(m.Get(name))
+}
+
+func (m Metadata) GetUint32(name string) uint32 {
+	return binary.LittleEndian.Uint32(m.Get(name))
+}
+
+func (m Metadata) GetUint16(name string) uint16 {
+	return binary.LittleEndian.Uint16(m.Get(name))
+}
+
+func (m Metadata) GetString(name string) string {
+	return string(m.Get(name))
+}
+
+func MetaPutUint64(name string, value uint64, metadata Metadata) {
+	valueBytes := make([]byte, int64Bytes)
+	binary.LittleEndian.PutUint64(valueBytes, value)
+	metadata[name] = valueBytes
+}
+
+func MetaPutUint32(name string, value uint32, metadata Metadata) {
+	valueBytes := make([]byte, int32Bytes)
+	binary.LittleEndian.PutUint32(valueBytes, value)
+	metadata[name] = valueBytes
+}
+
+func MetaPutUint16(name string, value uint16, metadata Metadata) {
+	valueBytes := make([]byte, int16Bytes)
+	binary.LittleEndian.PutUint16(valueBytes, value)
+	metadata[name] = valueBytes
+}
+
+func MetaPutString(name string, value string, metadata Metadata) {
+	metadata[name] = []byte(value)
 }

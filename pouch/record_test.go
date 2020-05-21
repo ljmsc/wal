@@ -49,12 +49,12 @@ func TestParseRecord(t *testing.T) {
 	data := []byte("my_test_data")
 
 	metadataSizeBytes := make([]byte, MetaMetadataSizeField)
-	binary.PutVarint(metadataSizeBytes, metadata.GetSize())
+	binary.LittleEndian.PutUint64(metadataSizeBytes, metadata.GetSize())
 
 	keySize := len(key)
 	dataSize := len(data)
 	keySizeBytes := make([]byte, MetaRecordKeySizeField)
-	binary.PutVarint(keySizeBytes, int64(keySize))
+	binary.LittleEndian.PutUint64(keySizeBytes, uint64(keySize))
 
 	recordSize := MetaMetadataSizeField + int(metadata.GetSize()) + MetaRecordKeySizeField + keySize + dataSize
 	recordBytes := make([]byte, 0, recordSize)
@@ -83,12 +83,12 @@ func TestParseRecordWithoutMetadata(t *testing.T) {
 	data := []byte("my_test_data")
 
 	metadataSizeBytes := make([]byte, MetaMetadataSizeField)
-	binary.PutVarint(metadataSizeBytes, 0)
+	binary.LittleEndian.PutUint64(metadataSizeBytes, 0)
 
 	keySize := len(key)
 	dataSize := len(data)
 	keySizeBytes := make([]byte, MetaRecordKeySizeField)
-	binary.PutVarint(keySizeBytes, int64(keySize))
+	binary.LittleEndian.PutUint64(keySizeBytes, uint64(keySize))
 
 	recordSize := MetaMetadataSizeField + MetaRecordKeySizeField + keySize + dataSize
 	recordBytes := make([]byte, 0, recordSize)

@@ -39,10 +39,10 @@ func TestRecordToEntryToRecord(t *testing.T) {
 	testSeqNum := uint64(42)
 	testVersion := uint64(2)
 	seqNumBytes := make([]byte, bucket.MetaSequenceNumberSize)
-	binary.PutUvarint(seqNumBytes, testSeqNum)
+	binary.LittleEndian.PutUint64(seqNumBytes, testSeqNum)
 
 	versionBytes := make([]byte, MetaVersionSize)
-	binary.PutUvarint(versionBytes, testVersion)
+	binary.LittleEndian.PutUint64(versionBytes, testVersion)
 
 	record := bucket.CreateRecord(testKey, testData,
 		pouch.MetaRecord{
@@ -77,7 +77,7 @@ func TestEntryVersion(t *testing.T) {
 	testVersion := uint64(2)
 
 	seqNumBytes := make([]byte, bucket.MetaSequenceNumberSize)
-	binary.PutUvarint(seqNumBytes, 42)
+	binary.LittleEndian.PutUint64(seqNumBytes, 42)
 
 	entry := CreateEntry(testKey, testData, pouch.MetaRecord{
 		Name: bucket.SequenceNumberMetadataKey,

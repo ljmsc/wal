@@ -1,6 +1,6 @@
 # WAL (Write ahead log)
 [![Go Report Card](https://goreportcard.com/badge/github.com/ljmsc/wal)](https://goreportcard.com/report/github.com/ljmsc/wal)
-[![GoDoc](https://godoc.org/github.com/ljmsc/wal?status.svg)](https://godoc.org/github.com/ljmsc/wal)
+[![GoDoc](https://godoc.org/github.com/ljmsc/wal?status.svg)](https://pkg.go.dev/mod/github.com/ljmsc/wal?tab=overview)
 
 wal is a write ahead log written in go.
 

@@ -61,7 +61,7 @@ func ParseRecord(b []byte, record *Record) error {
 	if len(b) < MetaMetadataSizeField {
 		return fmt.Errorf("not enough bytes to parse metadata size. Bytes: %d", len(b))
 	}
-	metadataSize, _ := binary.Varint(b[:MetaMetadataSizeField])
+	metadataSize := binary.LittleEndian.Uint64(b[:MetaMetadataSizeField])
 	b = b[MetaMetadataSizeField:]
 	if metadataSize > 0 {
 		record.Metadata = make(map[string][]byte)
@@ -75,12 +75,12 @@ func ParseRecord(b []byte, record *Record) error {
 	if len(b) < MetaRecordKeySizeField {
 		return fmt.Errorf("not enough bytes to parse key size. Bytes: %d", len(b))
 	}
-	keySize, _ := binary.Varint(b[:MetaRecordKeySizeField])
+	keySize := binary.LittleEndian.Uint64(b[:MetaRecordKeySizeField])
 	if keySize < 1 {
 		return fmt.Errorf("key size is less then 1: %d", keySize)
 	}
 	b = b[MetaRecordKeySizeField:]
-	if int64(len(b)) < (keySize - MetaRecordKeySizeField) {
+	if uint64(len(b)) < keySize {
 		return fmt.Errorf("not enough bytes to parse key. KeySize: %d Bytes: %d", keySize, len(b))
 	}
 	record.Key = b[:keySize]
@@ -92,27 +92,27 @@ func ParseRecord(b []byte, record *Record) error {
 	return nil
 }
 
-func (j Record) HeaderSize() int64 {
-	return MetaMetadataSizeField + j.Metadata.GetSize() + MetaRecordKeySizeField + int64(len(j.Key))
+func (j Record) HeaderSize() uint64 {
+	return MetaMetadataSizeField + j.Metadata.GetSize() + MetaRecordKeySizeField + uint64(len(j.Key))
 }
 
 // Size returns the size of the record
-func (j Record) Size() int64 {
-	return j.HeaderSize() + int64(len(j.Data))
+func (j Record) Size() uint64 {
+	return j.HeaderSize() + uint64(len(j.Data))
 }
 
 func (j Record) HeaderBytes() []byte {
 	b := make([]byte, 0, j.HeaderSize())
 
 	metadataSize := make([]byte, MetaMetadataSizeField)
-	binary.PutVarint(metadataSize, j.Metadata.GetSize())
+	binary.LittleEndian.PutUint64(metadataSize, j.Metadata.GetSize())
 	b = append(b, metadataSize...)
 	if j.Metadata.GetSize() > 0 {
 		b = append(b, j.Metadata.Bytes()...)
 	}
 
 	keySizeBytes := make([]byte, MetaRecordKeySizeField)
-	binary.PutVarint(keySizeBytes, int64(len(j.Key)))
+	binary.LittleEndian.PutUint64(keySizeBytes, uint64(len(j.Key)))
 	b = append(b, keySizeBytes...)
 	b = append(b, j.Key...)
 	return b

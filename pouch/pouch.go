@@ -80,7 +80,7 @@ func OpenWithHandler(name string, handler func(r Envelope) error) (*Pouch, error
 
 // readRecordHeader .
 // [8 Record Size][8 RecordHeaderSize][RecordHeader]
-func (p *Pouch) readRecordHeader(offset int64, r *Record) (int64, error) {
+func (p *Pouch) readRecordHeader(offset int64, r *Record) (uint64, error) {
 	p.fileMutex.RLock()
 	defer p.fileMutex.RUnlock()
 	if p.closed {
@@ -94,7 +94,7 @@ func (p *Pouch) readRecordHeader(offset int64, r *Record) (int64, error) {
 		}
 		return 0, fmt.Errorf("can't read record size from pouch file: %w", err)
 	}
-	recordSize, _ := binary.Varint(recordSizeBytes)
+	recordSize := binary.LittleEndian.Uint64(recordSizeBytes)
 
 	recordHeaderSizeBytes := make([]byte, MetaRecordHeaderSizeField)
 	if _, err := p.file.ReadAt(recordHeaderSizeBytes, offset+MetaRecordSizeField); err != nil {
@@ -103,7 +103,7 @@ func (p *Pouch) readRecordHeader(offset int64, r *Record) (int64, error) {
 		}
 		return 0, fmt.Errorf("can't read record size from pouch file: %w", err)
 	}
-	recordHeaderSize, _ := binary.Varint(recordHeaderSizeBytes)
+	recordHeaderSize := binary.LittleEndian.Uint64(recordHeaderSizeBytes)
 
 	recordHeaderBytes := make([]byte, recordHeaderSize)
 	if _, err := p.file.ReadAt(recordHeaderBytes, offset+MetaRecordSizeField+MetaRecordHeaderSizeField); err != nil {
@@ -119,7 +119,7 @@ func (p *Pouch) readRecordHeader(offset int64, r *Record) (int64, error) {
 
 // readRecord .
 // [8 Record Size][8 RecordHeaderSize][RecordHeader][RecordData]
-func (p *Pouch) readRecord(offset int64, r *Record) (int64, error) {
+func (p *Pouch) readRecord(offset int64, r *Record) (uint64, error) {
 	p.fileMutex.RLock()
 	defer p.fileMutex.RUnlock()
 	if p.closed {
@@ -127,16 +127,16 @@ func (p *Pouch) readRecord(offset int64, r *Record) (int64, error) {
 	}
 
 	recordSizeBytes := make([]byte, MetaRecordSizeField)
-	if _, err := p.file.ReadAt(recordSizeBytes, offset); err != nil {
+	if _, err := p.file.ReadAt(recordSizeBytes, int64(offset)); err != nil {
 		if err == io.EOF {
 			return 0, err
 		}
 		return 0, fmt.Errorf("can't read record size from pouch file: %w", err)
 	}
-	recordSize, _ := binary.Varint(recordSizeBytes)
+	recordSize := binary.LittleEndian.Uint64(recordSizeBytes)
 
 	recordBytes := make([]byte, recordSize)
-	if _, err := p.file.ReadAt(recordBytes, offset+MetaRecordSizeField+MetaRecordHeaderSizeField); err != nil {
+	if _, err := p.file.ReadAt(recordBytes, int64(offset+MetaRecordSizeField+MetaRecordHeaderSizeField)); err != nil {
 		return 0, fmt.Errorf("can't read record data bytes from pouch file: %w", err)
 	}
 
@@ -171,11 +171,11 @@ func (p *Pouch) writeRecord(r *Record) (int64, error) {
 
 	fullSize := r.Size()
 	fullSizeBytes := make([]byte, MetaRecordSizeField)
-	binary.PutVarint(fullSizeBytes, fullSize)
+	binary.LittleEndian.PutUint64(fullSizeBytes, fullSize)
 
 	headerSize := r.HeaderSize()
 	headerSizeBytes := make([]byte, MetaRecordHeaderSizeField)
-	binary.PutVarint(headerSizeBytes, headerSize)
+	binary.LittleEndian.PutUint64(headerSizeBytes, headerSize)
 
 	b := make([]byte, 0, MetaRecordSizeField+MetaRecordHeaderSizeField+fullSize)
 	b = append(b, fullSizeBytes...)
@@ -209,7 +209,7 @@ func (p *Pouch) StreamRecords(headOnly bool) <-chan Envelope {
 		for {
 			r := Record{}
 			var err error
-			var size int64
+			var size uint64
 			if headOnly {
 				size, err = p.readRecordHeader(offset, &r)
 			} else {
@@ -223,7 +223,7 @@ func (p *Pouch) StreamRecords(headOnly bool) <-chan Envelope {
 				break
 			}
 			stream <- Envelope{Offset: offset, Record: &r}
-			offset = offset + MetaRecordSizeField + MetaRecordHeaderSizeField + size
+			offset = offset + MetaRecordSizeField + MetaRecordHeaderSizeField + int64(size)
 		}
 		close(stream)
 	}()

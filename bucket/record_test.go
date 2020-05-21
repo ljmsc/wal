@@ -26,18 +26,18 @@ func TestParseRecord(t *testing.T) {
 	data := []byte("my_test_data")
 
 	seqNumBytes := make([]byte, MetaSequenceNumberSize)
-	binary.PutUvarint(seqNumBytes, sn)
+	binary.LittleEndian.PutUint64(seqNumBytes, sn)
 
 	metadata := pouch.Metadata(make(map[string][]byte))
 	metadata[SequenceNumberMetadataKey] = seqNumBytes
 
 	metadataSizeBytes := make([]byte, pouch.MetaMetadataSizeField)
-	binary.PutVarint(metadataSizeBytes, metadata.GetSize())
+	binary.LittleEndian.PutUint64(metadataSizeBytes, metadata.GetSize())
 
 	keySize := len(key)
 	dataSize := len(data)
 	keySizeBytes := make([]byte, pouch.MetaRecordKeySizeField)
-	binary.PutVarint(keySizeBytes, int64(keySize))
+	binary.LittleEndian.PutUint64(keySizeBytes, uint64(keySize))
 
 	recordBytes := make([]byte, 0, pouch.MetaMetadataSizeField+int(metadata.GetSize())+pouch.MetaRecordKeySizeField+keySize+dataSize)
 
@@ -90,8 +90,4 @@ func TestToPouchRecord(t *testing.T) {
 	assert.Equal(t, addressPr, &pr)
 	assert.EqualValues(t, []byte("my_test_key"), pr.Key)
 	assert.EqualValues(t, []byte("test meta"), pr.Metadata["test1"])
-}
-
-func TestConvertRecord(t *testing.T) {
-	// pr := pouch.CreateRecordWithMetadata()
 }
