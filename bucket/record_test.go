@@ -25,7 +25,7 @@ func TestParseRecord(t *testing.T) {
 	key := []byte("my_test_key")
 	data := []byte("my_test_data")
 
-	seqNumBytes := make([]byte, MetaSequenceNumberSize)
+	seqNumBytes := make([]byte, 8)
 	binary.LittleEndian.PutUint64(seqNumBytes, sn)
 
 	metadata := pouch.Metadata(make(map[string][]byte))

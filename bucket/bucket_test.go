@@ -36,7 +36,7 @@ func createTestBucket(name string, dir string) *Bucket {
 func TestBucketOpen(t *testing.T) {
 	prepare(bucketTestDir)
 	defer cleanup(bucketTestDir)
-	c, err := OpenWithHandler(bucketTestDir+"chain_open", nil)
+	c, err := OpenWithHandler(bucketTestDir+"chain_open", true, nil)
 
 	if !assert.NoError(t, err) {
 		return

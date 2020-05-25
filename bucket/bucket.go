@@ -42,17 +42,17 @@ type Bucket struct {
 }
 
 // OpenWithHandler .
-func OpenWithHandler(name string, handler func(r Record) error) (*Bucket, error) {
-	return Open(name, DefaultMaxPouchSize, handler)
+func OpenWithHandler(name string, headOnly bool, handler func(r Record) error) (*Bucket, error) {
+	return Open(name, DefaultMaxPouchSize, headOnly, handler)
 }
 
 // OpenWithSize .
 func OpenWithSize(name string, maxPouchSize uint64) (*Bucket, error) {
-	return Open(name, maxPouchSize, nil)
+	return Open(name, maxPouchSize, true, nil)
 }
 
 // OpenWithSize .
-func Open(name string, maxPouchSize uint64, handler func(r Record) error) (*Bucket, error) {
+func Open(name string, maxPouchSize uint64, headOnly bool, handler func(r Record) error) (*Bucket, error) {
 	if maxPouchSize == 0 {
 		maxPouchSize = DefaultMaxPouchSize
 	}
@@ -79,7 +79,7 @@ func Open(name string, maxPouchSize uint64, handler func(r Record) error) (*Buck
 
 	for _, pouchName := range pouchNames {
 		sequenceNumbers := make([]uint64, 0, 10)
-		pou, err := pouch.OpenWithHandler(pouchName, func(envelope pouch.Envelope) error {
+		pou, err := pouch.OpenWithHandler(pouchName, headOnly, func(envelope pouch.Envelope) error {
 			r := Record{}
 			if err := toRecord(*envelope.Record, &r); err != nil {
 				return fmt.Errorf("can't convert record from pouch: %w", err)

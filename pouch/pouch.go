@@ -36,11 +36,11 @@ type Pouch struct {
 
 // Open opens a pouch file with the given name. If the pouch already exists the pouch is read.
 func Open(name string) (*Pouch, error) {
-	return OpenWithHandler(name, nil)
+	return OpenWithHandler(name, true, nil)
 }
 
 // Open opens a pouch file with the given name. If the pouch already exists the pouch is read.
-func OpenWithHandler(name string, handler func(r Envelope) error) (*Pouch, error) {
+func OpenWithHandler(name string, headOnly bool, handler func(r Envelope) error) (*Pouch, error) {
 	s := Pouch{
 		name:              name,
 		recordOffsets:     make(map[uint64]int64),
@@ -56,7 +56,7 @@ func OpenWithHandler(name string, handler func(r Envelope) error) (*Pouch, error
 		return nil, fmt.Errorf("can't open pouch file: %w", err)
 	}
 
-	recordStream := s.StreamRecords(true)
+	recordStream := s.StreamRecords(headOnly)
 	for {
 		item, ok := <-recordStream
 		if !ok {

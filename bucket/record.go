@@ -5,7 +5,6 @@ import (
 )
 
 const (
-	MetaSequenceNumberSize    = 8
 	SequenceNumberMetadataKey = "sq"
 )
 
