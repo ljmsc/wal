@@ -40,7 +40,7 @@ func (e Entry) Validate() error {
 	if e.Version() == 0 {
 		return VersionIsZeroErr
 	}
-	return e.Record.Validate()
+	return nil
 }
 
 func (r Entry) Version() uint64 {

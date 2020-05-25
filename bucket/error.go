@@ -71,15 +71,18 @@ type AddPouchFileErr struct {
 func (e AddPouchFileErr) Error() string {
 	return "can't add new pouch file to bucket: " + e.Err.Error()
 }
-
 func (e AddPouchFileErr) Unwrap() error { return e.Err }
 
 type CompressionErr struct {
 	Err error
 }
 
-func (e CompressionErr) Error() string {
-	return "can't compress bucket: " + e.Err.Error()
+func (e CompressionErr) Error() string { return "can't compress bucket: " + e.Err.Error() }
+func (e CompressionErr) Unwrap() error { return e.Err }
+
+type RecordNotValidErr struct {
+	Err error
 }
 
-func (e CompressionErr) Unwrap() error { return e.Err }
+func (e RecordNotValidErr) Error() string { return "record is not valid: " + e.Err.Error() }
+func (e RecordNotValidErr) Unwrap() error { return e.Err }

@@ -41,7 +41,7 @@ func Open(name string, maxFileSize uint64, headOnly bool, handler func(e Entry) 
 			return fmt.Errorf("can't convert record to entry: %w", err)
 		}
 		if err := entry.Validate(); err != nil {
-			return fmt.Errorf("entry is not valid: %w", err)
+			return EntryNotValidErr{Err: err}
 		}
 		if err := handler(entry); err != nil {
 			return fmt.Errorf("can't execute handler for entry: %w", err)
@@ -104,6 +104,10 @@ func (w *Wal) Write(e *Entry) error {
 		version = currentVersion + 1
 	}
 	setVersion(version, e)
+
+	if err := e.Validate(); err != nil {
+		return EntryNotValidErr{Err: err}
+	}
 
 	r := bucket.Record{}
 	e.toRecord(&r)

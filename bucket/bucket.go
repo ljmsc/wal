@@ -87,7 +87,7 @@ func Open(name string, maxPouchSize uint64, headOnly bool, handler func(r Record
 			keyHash := r.Key.Hash()
 
 			if err := r.Validate(); err != nil {
-				return fmt.Errorf("record is not valid: %w", err)
+				return RecordNotValidErr{Err: err}
 			}
 
 			if handler != nil {
@@ -269,6 +269,11 @@ func (b *Bucket) write(r *Record) error {
 	b.dataMutex.Lock()
 	defer b.dataMutex.Unlock()
 	setSequenceNumber(b.latestSequenceNumber+1, r)
+
+	if err := r.Validate(); err != nil {
+		return RecordNotValidErr{Err: err}
+	}
+
 	pr := pouch.Record{}
 	r.toPouchRecord(&pr)
 

@@ -39,7 +39,7 @@ func (r Record) Validate() error {
 		return ZeroSequenceErr
 	}
 
-	return r.Record.Validate()
+	return nil
 }
 
 func (r Record) SequenceNumber() uint64 {

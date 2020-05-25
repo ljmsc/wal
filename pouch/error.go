@@ -50,3 +50,13 @@ func (e EnvelopeErr) Error() string {
 }
 
 func (e EnvelopeErr) Unwrap() error { return e.Err }
+
+type RecordNotValidErr struct {
+	Err error
+}
+
+func (e RecordNotValidErr) Error() string {
+	return "record is not valid: " + e.Err.Error()
+}
+
+func (e RecordNotValidErr) Unwrap() error { return e.Err }

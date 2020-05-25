@@ -33,3 +33,10 @@ type WriteErr struct {
 
 func (e WriteErr) Error() string { return "can't write from ahead log: " + e.Err.Error() }
 func (e WriteErr) Unwrap() error { return e.Err }
+
+type EntryNotValidErr struct {
+	Err error
+}
+
+func (e EntryNotValidErr) Error() string { return "record is not valid: " + e.Err.Error() }
+func (e EntryNotValidErr) Unwrap() error { return e.Err }

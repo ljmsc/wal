@@ -161,7 +161,7 @@ func (p *Pouch) writeRecord(r *Record) (int64, error) {
 	}
 
 	if err := r.Validate(); err != nil {
-		return 0, fmt.Errorf("record is not valid: %w", err)
+		return 0, RecordNotValidErr{Err: err}
 	}
 
 	offset, err := p.file.Seek(0, io.SeekCurrent)
