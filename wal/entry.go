@@ -6,7 +6,6 @@ import (
 )
 
 const (
-	MetaVersionSize    = 8
 	VersionMetadataKey = "ver"
 )
 

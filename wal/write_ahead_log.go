@@ -23,19 +23,19 @@ type Wal struct {
 }
 
 // OpenWithHandler .
-func OpenWithHandler(name string, handler func(e Entry) error) (*Wal, error) {
-	return Open(name, 0, handler)
+func OpenWithHandler(name string, headOnly bool, handler func(e Entry) error) (*Wal, error) {
+	return Open(name, 0, headOnly, handler)
 }
 
 // Open opens a new or existing wal
-func Open(name string, maxFileSize uint64, handler func(e Entry) error) (*Wal, error) {
+func Open(name string, maxFileSize uint64, headOnly bool, handler func(e Entry) error) (*Wal, error) {
 	w := Wal{
 		latestVersions:       make(map[uint64]uint64),
 		keyVersionSeqNumbers: make(map[uint64]map[uint64]uint64),
 		dataMutex:            sync.RWMutex{},
 		closed:               false,
 	}
-	b, err := bucket.Open(name, maxFileSize, func(r bucket.Record) error {
+	b, err := bucket.Open(name, maxFileSize, headOnly, func(r bucket.Record) error {
 		entry := Entry{}
 		if err := recordToEntry(r, &entry); err != nil {
 			return fmt.Errorf("can't convert record to entry: %w", err)

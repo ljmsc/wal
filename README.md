@@ -14,7 +14,7 @@ go get -u github.com/ljmsc/wal
 
 ### basic
 ```go
-storage, err := wal.Open("./path/to/wal", bucket.DefaultMaxPouchSize, nil)
+storage, err := wal.Open("./path/to/wal", bucket.DefaultMaxPouchSize, true, nil)
 if err != nil {
     // handle error
     panic(err)

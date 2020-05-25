@@ -25,7 +25,7 @@ func cleanup(dir string) {
 }
 
 func createTestLog(name string, dir string) *Wal {
-	b, err := Open(dir+name, 500, nil)
+	b, err := Open(dir+name, 500, true, nil)
 	if err != nil {
 		panic(err)
 	}
@@ -52,7 +52,7 @@ func TestOpenWithHandler(t *testing.T) {
 	prepare(walTestDir)
 	defer cleanup(walTestDir)
 
-	w, err := OpenWithHandler(walTestDir+"test_open", nil)
+	w, err := OpenWithHandler(walTestDir+"test_open", true, nil)
 	require.NoError(t, err)
 	require.NotNil(t, w)
 	err = w.Close()
