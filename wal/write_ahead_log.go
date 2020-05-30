@@ -161,6 +161,9 @@ func (w *Wal) ReadByKey(key pouch.Key, headOnly bool, e *Entry) error {
 		if errors.Is(err, bucket.ReadErr{}) {
 			return ReadErr{err}
 		}
+		if errors.Is(err, bucket.RecordNotFoundErr) {
+			return EntryNotFoundErr
+		}
 		return err
 	}
 	if err := recordToEntry(r, e); err != nil {
@@ -180,6 +183,9 @@ func (w *Wal) ReadBySequenceNumber(seqNum uint64, headOnly bool, e *Entry) error
 	if err := w.bucket.ReadBySequenceNumber(seqNum, headOnly, &r); err != nil {
 		if errors.Is(err, bucket.ReadErr{}) {
 			return ReadErr{err}
+		}
+		if errors.Is(err, bucket.RecordNotFoundErr) {
+			return EntryNotFoundErr
 		}
 		return err
 	}
@@ -209,6 +215,9 @@ func (w *Wal) ReadByKeyAndVersion(key pouch.Key, version uint64, headOnly bool, 
 	if err := w.bucket.ReadBySequenceNumber(seqNum, headOnly, &r); err != nil {
 		if errors.Is(err, bucket.ReadErr{}) {
 			return ReadErr{err}
+		}
+		if errors.Is(err, bucket.RecordNotFoundErr) {
+			return EntryNotFoundErr
 		}
 		return err
 	}
