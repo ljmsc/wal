@@ -2,6 +2,7 @@ package pouch
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -101,13 +102,13 @@ func (p *Pouch) readRecordHeader(offset int64, r *Record) (uint64, error) {
 		if err == io.EOF {
 			return 0, err
 		}
-		return 0, fmt.Errorf("can't read record size from pouch file: %w", err)
+		return 0, fmt.Errorf("can't read record header size from pouch file: %w", err)
 	}
 	recordHeaderSize := binary.LittleEndian.Uint64(recordHeaderSizeBytes)
 
 	recordHeaderBytes := make([]byte, recordHeaderSize)
 	if _, err := p.file.ReadAt(recordHeaderBytes, offset+MetaRecordSizeField+MetaRecordHeaderSizeField); err != nil {
-		return 0, fmt.Errorf("can't read record data bytes from pouch file: %w", err)
+		return 0, fmt.Errorf("can't read record byte data from pouch file: %w", err)
 	}
 
 	if err := ParseRecord(recordHeaderBytes, r); err != nil {
@@ -127,7 +128,7 @@ func (p *Pouch) readRecord(offset int64, r *Record) (uint64, error) {
 	}
 
 	recordSizeBytes := make([]byte, MetaRecordSizeField)
-	if _, err := p.file.ReadAt(recordSizeBytes, int64(offset)); err != nil {
+	if _, err := p.file.ReadAt(recordSizeBytes, offset); err != nil {
 		if err == io.EOF {
 			return 0, err
 		}
@@ -136,8 +137,8 @@ func (p *Pouch) readRecord(offset int64, r *Record) (uint64, error) {
 	recordSize := binary.LittleEndian.Uint64(recordSizeBytes)
 
 	recordBytes := make([]byte, recordSize)
-	if _, err := p.file.ReadAt(recordBytes, int64(offset+MetaRecordSizeField+MetaRecordHeaderSizeField)); err != nil {
-		return 0, fmt.Errorf("can't read record data bytes from pouch file: %w", err)
+	if _, err := p.file.ReadAt(recordBytes, offset+MetaRecordSizeField+MetaRecordHeaderSizeField); err != nil {
+		return 0, fmt.Errorf("can't read record byte data from pouch file: %w", err)
 	}
 
 	if err := ParseRecord(recordBytes, r); err != nil {
@@ -161,7 +162,7 @@ func (p *Pouch) writeRecord(r *Record) (int64, error) {
 	}
 
 	if err := r.Validate(); err != nil {
-		return 0, fmt.Errorf("record is not valid: %w", err)
+		return 0, RecordNotValidErr{Err: err}
 	}
 
 	offset, err := p.file.Seek(0, io.SeekCurrent)
@@ -219,7 +220,7 @@ func (p *Pouch) StreamRecords(headOnly bool) <-chan Envelope {
 				if err == io.EOF {
 					break
 				}
-				stream <- Envelope{Err: &ReadErr{Offset: offset, Err: err}}
+				stream <- Envelope{Err: err}
 				break
 			}
 			stream <- Envelope{Offset: offset, Record: &r}
@@ -248,7 +249,7 @@ func (p *Pouch) StreamLatestRecords(headOnly bool) <-chan Envelope {
 				if err == io.EOF {
 					break
 				}
-				stream <- Envelope{Err: &ReadErr{Offset: offset, Err: err}}
+				stream <- Envelope{Err: err}
 				continue
 			}
 			stream <- Envelope{Offset: offset, Record: &r}
@@ -283,7 +284,10 @@ func (p *Pouch) ReadByOffset(offset int64, headOnly bool, r *Record) error {
 	}
 
 	if err != nil {
-		return &ReadErr{Offset: offset, Err: err}
+		if errors.Is(err, io.EOF) {
+			return InvalidRecordOffsetErr
+		}
+		return ReadErr{Offset: offset, Err: err}
 	}
 
 	return nil
@@ -317,7 +321,7 @@ func (p *Pouch) Write(key Key, data Data) (int64, error) {
 func (p *Pouch) WriteRecord(record *Record) (int64, error) {
 	offset, err := p.writeRecord(record)
 	if err != nil {
-		return 0, &WriteErr{Err: err}
+		return 0, WriteErr{Err: err}
 	}
 	return offset, nil
 }

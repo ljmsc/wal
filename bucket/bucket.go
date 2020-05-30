@@ -82,12 +82,12 @@ func Open(name string, maxPouchSize uint64, headOnly bool, handler func(r Record
 		pou, err := pouch.OpenWithHandler(pouchName, headOnly, func(envelope pouch.Envelope) error {
 			r := Record{}
 			if err := toRecord(*envelope.Record, &r); err != nil {
-				return fmt.Errorf("can't convert record from pouch: %w", err)
+				return ConvertErr{Err: err}
 			}
 			keyHash := r.Key.Hash()
 
 			if err := r.Validate(); err != nil {
-				return fmt.Errorf("record is not valid: %w", err)
+				return RecordNotValidErr{Err: err}
 			}
 
 			if handler != nil {
@@ -142,7 +142,7 @@ func (b *Bucket) pouch(listPosition uint64) (*pouch.Pouch, error) {
 	listSize := uint64(len(b.pouchList))
 	if listSize == 0 {
 		if err := b.addPouch(); err != nil {
-			return nil, fmt.Errorf("can't read pouch: %w", err)
+			return nil, fmt.Errorf("can't add new pouch to bucket: %w", err)
 		}
 		listSize = uint64(len(b.pouchList))
 	}
@@ -164,7 +164,7 @@ func (b *Bucket) addPouch() error {
 	pouchName := b.pouchName(b.latestSequenceNumber + 1)
 	pou, err := pouch.Open(pouchName)
 	if err != nil {
-		return AddPouchFileErr{Err: err}
+		return fmt.Errorf("can't open new pouch file: %w", err)
 	}
 	b.pouchList = append(b.pouchList, pou)
 	pouchNames := b.store.get()
@@ -172,7 +172,7 @@ func (b *Bucket) addPouch() error {
 	if err := b.store.update(pouchNames); err != nil {
 		_ = pou.Close()
 		_ = os.Remove(pouchName)
-		return AddPouchFileErr{Err: err}
+		return fmt.Errorf("can't update bucket store: %w", err)
 	}
 	return nil
 }
@@ -186,15 +186,11 @@ func (b *Bucket) readFromPouch(p *pouch.Pouch, offset int64, headOnly bool, r *R
 
 	sr := pouch.Record{}
 	if err := p.ReadByOffset(offset, headOnly, &sr); err != nil {
-		return ReadErr{
-			Err: err,
-		}
+		return err
 	}
 
 	if err := toRecord(sr, r); err != nil {
-		return ReadErr{
-			Err: err,
-		}
+		return ConvertErr{Err: err}
 	}
 	return nil
 }
@@ -207,31 +203,27 @@ func (b *Bucket) read(hash uint64, headOnly bool, r *Record) error {
 	}
 
 	for i := 0; i < len(b.pouchList); i++ {
-		seg, err := b.pouch(uint64(i))
+		pou, err := b.pouch(uint64(i))
 		if err != nil {
 			if errors.Is(err, PouchNotFoundErr) {
 				break
 			}
-			return ReadErr{
-				PouchName: seg.Name(),
-				Err:       err,
-			}
+			return err
 		}
 		sr := pouch.Record{}
-		if err := seg.ReadByHash(hash, headOnly, &sr); err != nil {
+		if err := pou.ReadByHash(hash, headOnly, &sr); err != nil {
 			if errors.Is(err, pouch.RecordNotFoundErr) {
 				continue
 			}
+
 			return ReadErr{
-				PouchName: seg.Name(),
+				PouchName: pou.Name(),
 				Err:       err,
 			}
 		}
 
 		if err = toRecord(sr, r); err != nil {
-			return ReadErr{
-				Err: err,
-			}
+			return ConvertErr{Err: err}
 		}
 
 		return nil
@@ -251,15 +243,16 @@ func (b *Bucket) write(r *Record) error {
 		var err error
 		latestPouch, err = b.pouch(0)
 		if err != nil {
-			return WriteErr{Err: err}
+			//
+			return err
 		}
 		segSize, err := latestPouch.Size()
 		if err != nil {
-			return WriteErr{Err: err}
+			return err
 		}
 		if uint64(segSize) > b.maxPouchSize {
 			if err := b.addPouch(); err != nil {
-				return WriteErr{Err: err}
+				return err
 			}
 			continue
 		}
@@ -269,6 +262,11 @@ func (b *Bucket) write(r *Record) error {
 	b.dataMutex.Lock()
 	defer b.dataMutex.Unlock()
 	setSequenceNumber(b.latestSequenceNumber+1, r)
+
+	if err := r.Validate(); err != nil {
+		return RecordNotValidErr{Err: err}
+	}
+
 	pr := pouch.Record{}
 	r.toPouchRecord(&pr)
 
@@ -382,7 +380,18 @@ func (b *Bucket) ReadBySequenceNumber(seqNum uint64, headOnly bool, r *Record) e
 		return RecordNotFoundErr
 	}
 	pos := b.recordSequenceNumbers[seqNum]
-	return b.readFromPouch(pos.Pouch, pos.Offset, headOnly, r)
+	if err := b.readFromPouch(pos.Pouch, pos.Offset, headOnly, r); err != nil {
+		if errors.Is(err, pouch.ReadErr{}) {
+			return ReadErr{
+				SequenceNumber: seqNum,
+				PouchName:      pos.Pouch.Name(),
+				Err:            err,
+			}
+		}
+		return err
+	}
+	return nil
+
 }
 
 // Write writes key and data as a record to the pouch bucket
@@ -433,21 +442,13 @@ func (b *Bucket) StreamRecords(startSeqNum uint64, endSeqNum uint64, headOnly bo
 			sr := pouch.Record{}
 
 			if err := pos.Pouch.ReadByOffset(pos.Offset, headOnly, &sr); err != nil {
-				stream <- Envelope{Err: ReadErr{
-					SequenceNumber: i,
-					PouchName:      pos.Pouch.Name(),
-					Err:            err,
-				}}
+				stream <- Envelope{Err: err}
 				continue
 			}
 
 			r := Record{}
 			if err := toRecord(sr, &r); err != nil {
-				stream <- Envelope{Err: ReadErr{
-					SequenceNumber: i,
-					PouchName:      pos.Pouch.Name(),
-					Err:            err,
-				}}
+				stream <- Envelope{Err: ConvertErr{Err: err}}
 				continue
 			}
 			stream <- Envelope{
@@ -468,7 +469,7 @@ func (b *Bucket) StreamLatestRecords(headOnly bool) <-chan Envelope {
 		for _, sequenceNumber := range sequenceNumbers {
 			r := Record{}
 			if err := b.ReadBySequenceNumber(sequenceNumber, headOnly, &r); err != nil {
-				stream <- Envelope{Err: ReadErr{SequenceNumber: sequenceNumber, Err: err}}
+				stream <- Envelope{Err: err}
 				continue
 			}
 			stream <- Envelope{Record: &r}

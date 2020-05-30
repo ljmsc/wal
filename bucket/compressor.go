@@ -55,7 +55,7 @@ func createCompressor(b *Bucket) (*compressor, error) {
 	}
 	r := Record{}
 	if err := toRecord(pr, &r); err != nil {
-		return nil, fmt.Errorf("can't convert latest record: %w", err)
+		return nil, ConvertErr{Err: err}
 	}
 	c.endSeqNum = r.SequenceNumber()
 	c.bucketStartSeqNum = r.SequenceNumber()
@@ -183,7 +183,7 @@ func (c *compressor) apply() error {
 	if err := c.bucket.store.update(newPouchNameList); err != nil {
 		// the bucket will be closed to avoid data loss. After opening the bucket again, the old state should be restored
 		_ = c.bucket.Close()
-		return fmt.Errorf("can't update pouch names in bucket store. bucket is closed: %w", err)
+		return fmt.Errorf("can't update pouch names in bucket store. bucket is closed now to avoid data loss: %w", err)
 	}
 
 	// remove bucket store file backup
