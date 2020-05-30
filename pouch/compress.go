@@ -46,7 +46,7 @@ func CompressToFile(oldPouch *Pouch, newPouch *Pouch) error {
 			break
 		}
 		if item.Err != nil {
-			return EnvelopeErr{
+			return CompressionErr{
 				LastWrittenOffsetNew: lastWrittenOffsetNew,
 				LastWrittenOffsetOld: lastWrittenOffsetOld,
 				Err:                  item.Err,
