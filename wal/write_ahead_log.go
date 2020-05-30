@@ -1,6 +1,7 @@
 package wal
 
 import (
+	"errors"
 	"fmt"
 	"sync"
 
@@ -38,7 +39,7 @@ func Open(name string, maxFileSize uint64, headOnly bool, handler func(e Entry) 
 	b, err := bucket.Open(name, maxFileSize, headOnly, func(r bucket.Record) error {
 		entry := Entry{}
 		if err := recordToEntry(r, &entry); err != nil {
-			return fmt.Errorf("can't convert record to entry: %w", err)
+			return ConvertErr{Err: err}
 		}
 		if err := entry.Validate(); err != nil {
 			return EntryNotValidErr{Err: err}
@@ -68,12 +69,12 @@ func convertRecordStream(recordStream <-chan bucket.Envelope) <-chan Envelope {
 				break
 			}
 			if env.Err != nil {
-				stream <- Envelope{Err: ReadErr{env.Err}}
+				stream <- Envelope{Err: env.Err}
 				continue
 			}
 			e := Entry{}
 			if err := recordToEntry(*env.Record, &e); err != nil {
-				stream <- Envelope{Err: ReadErr{err}}
+				stream <- Envelope{Err: ConvertErr{Err: err}}
 				continue
 			}
 			stream <- Envelope{Entry: &e}
@@ -113,7 +114,10 @@ func (w *Wal) Write(e *Entry) error {
 	e.toRecord(&r)
 
 	if err := w.bucket.WriteRecord(&r); err != nil {
-		return WriteErr{err}
+		if errors.Is(err, bucket.WriteErr{}) {
+			return WriteErr{err}
+		}
+		return err
 	}
 
 	w.latestVersions[e.Key.Hash()] = version
@@ -154,10 +158,13 @@ func (w *Wal) ReadByKey(key pouch.Key, headOnly bool, e *Entry) error {
 	}
 	r := bucket.Record{}
 	if err := w.bucket.ReadByKey(key, headOnly, &r); err != nil {
-		return ReadErr{err}
+		if errors.Is(err, bucket.ReadErr{}) {
+			return ReadErr{err}
+		}
+		return err
 	}
 	if err := recordToEntry(r, e); err != nil {
-		return ReadErr{err}
+		return ConvertErr{err}
 	}
 	return nil
 }
@@ -171,10 +178,13 @@ func (w *Wal) ReadBySequenceNumber(seqNum uint64, headOnly bool, e *Entry) error
 	}
 	r := bucket.Record{}
 	if err := w.bucket.ReadBySequenceNumber(seqNum, headOnly, &r); err != nil {
-		return ReadErr{err}
+		if errors.Is(err, bucket.ReadErr{}) {
+			return ReadErr{err}
+		}
+		return err
 	}
 	if err := recordToEntry(r, e); err != nil {
-		return ReadErr{err}
+		return ConvertErr{err}
 	}
 	return nil
 }
@@ -197,10 +207,13 @@ func (w *Wal) ReadByKeyAndVersion(key pouch.Key, version uint64, headOnly bool, 
 	seqNum := w.keyVersionSeqNumbers[key.Hash()][version]
 	r := bucket.Record{}
 	if err := w.bucket.ReadBySequenceNumber(seqNum, headOnly, &r); err != nil {
-		return ReadErr{err}
+		if errors.Is(err, bucket.ReadErr{}) {
+			return ReadErr{err}
+		}
+		return err
 	}
 	if err := recordToEntry(r, e); err != nil {
-		return ReadErr{err}
+		return ConvertErr{err}
 	}
 
 	return nil
