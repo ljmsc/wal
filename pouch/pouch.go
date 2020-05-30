@@ -287,7 +287,7 @@ func (p *Pouch) ReadByOffset(offset int64, headOnly bool, r *Record) error {
 		if errors.Is(err, io.EOF) {
 			return InvalidRecordOffsetErr
 		}
-		return ReadErr{Err: err}
+		return ReadErr{Offset: offset, Err: err}
 	}
 
 	return nil
