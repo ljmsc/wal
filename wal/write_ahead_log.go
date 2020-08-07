@@ -128,6 +128,11 @@ func (w *Wal) Write(e *Entry) error {
 	return nil
 }
 
+// WriteBytes writes a byte slice to the write ahead log
+func (w *Wal) WriteBytes(key pouch.Key, data []byte) error {
+	return w.Write(CreateEntry(key, data))
+}
+
 // CompareAndWrite checks the given version with the latest entry in the wal.
 // if version > latest version => invalid version number
 // if version < latest version => version is to old, there is a newer version in the wal
@@ -147,6 +152,11 @@ func (w *Wal) CompareAndWrite(version uint64, e *Entry) error {
 		return OldVersionErr
 	}
 	return w.Write(e)
+}
+
+// CompareAndWriteBytes .
+func (w *Wal) CompareAndWriteBytes(version uint64, key pouch.Key, data []byte) error {
+	return w.CompareAndWrite(version, CreateEntry(key, data))
 }
 
 // ReadByKey reads the latest version of an entry by key
