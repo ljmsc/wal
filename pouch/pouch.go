@@ -19,13 +19,11 @@ const (
 type Pouch struct {
 	// name is the name if the pouch file
 	name string
-	// recordOffsets - the map key is the hash value of the record Key and the value is the pouch file offset
-	recordOffsets map[uint64]int64
-	//lastWrittenOffset is the last written offset
-	lastWrittenOffset int64
-	// recordCount counts the records in the pouch
-	recordCount uint64
-	// dataMutex is a mutex to protect the cached data in recordOffsets and lastWrittenOffset
+	// recordKeyOffsets - the map key is the hash value of the record Key and the value is the pouch file offset
+	recordKeyOffsets map[uint64][]int64
+	// recordOffsets - the offsets of the written records
+	recordOffsets []int64
+	// dataMutex is a mutex to protect the cached data in recordKeyOffsets and lastWrittenOffset
 	dataMutex sync.RWMutex
 	// file is the pouch file
 	file *os.File
@@ -43,13 +41,12 @@ func Open(name string) (*Pouch, error) {
 // Open opens a pouch file with the given name. If the pouch already exists the pouch is read.
 func OpenWithHandler(name string, headOnly bool, handler func(r Envelope) error) (*Pouch, error) {
 	s := Pouch{
-		name:              name,
-		recordOffsets:     make(map[uint64]int64),
-		lastWrittenOffset: 0,
-		recordCount:       0,
-		dataMutex:         sync.RWMutex{},
-		fileMutex:         sync.RWMutex{},
-		closed:            false,
+		name:             name,
+		recordKeyOffsets: make(map[uint64][]int64),
+		recordOffsets:    make([]int64, 0, 10),
+		dataMutex:        sync.RWMutex{},
+		fileMutex:        sync.RWMutex{},
+		closed:           false,
 	}
 	var err error
 	s.file, err = os.OpenFile(name, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0600)
@@ -72,9 +69,11 @@ func OpenWithHandler(name string, headOnly bool, handler func(r Envelope) error)
 				return nil, fmt.Errorf("can't execute handler for item: %w", err)
 			}
 		}
-		s.lastWrittenOffset = item.Offset
-		s.recordOffsets[item.Record.Key.Hash()] = item.Offset
-		s.recordCount++
+		if _, ok := s.recordKeyOffsets[item.Record.Key.Hash()]; !ok {
+			s.recordKeyOffsets[item.Record.Key.Hash()] = make([]int64, 0, 10)
+		}
+		s.recordKeyOffsets[item.Record.Key.Hash()] = append(s.recordKeyOffsets[item.Record.Key.Hash()], item.Offset)
+		s.recordOffsets = append(s.recordOffsets, item.Offset)
 	}
 	return &s, nil
 }
@@ -165,9 +164,9 @@ func (p *Pouch) writeRecord(r *Record) (int64, error) {
 		return 0, RecordNotValidErr{Err: err}
 	}
 
-	offset, err := p.file.Seek(0, io.SeekCurrent)
+	offset, err := p.Size()
 	if err != nil {
-		return 0, fmt.Errorf("can't seek offset from file: %w", err)
+		return 0, fmt.Errorf("can't get current offset from file: %w", err)
 	}
 
 	fullSize := r.Size()
@@ -193,9 +192,8 @@ func (p *Pouch) writeRecord(r *Record) (int64, error) {
 	}
 
 	p.dataMutex.Lock()
-	p.lastWrittenOffset = offset
-	p.recordOffsets[r.Key.Hash()] = offset
-	p.recordCount++
+	p.recordKeyOffsets[r.Key.Hash()] = append(p.recordKeyOffsets[r.Key.Hash()], offset)
+	p.recordOffsets = append(p.recordOffsets, offset)
 	p.dataMutex.Unlock()
 
 	return offset, nil
@@ -297,10 +295,13 @@ func (p *Pouch) ReadByOffset(offset int64, headOnly bool, r *Record) error {
 func (p *Pouch) ReadByHash(keyHash uint64, headOnly bool, r *Record) error {
 	p.dataMutex.RLock()
 	defer p.dataMutex.RUnlock()
-	if _, ok := p.recordOffsets[keyHash]; !ok {
+	if _, ok := p.recordKeyOffsets[keyHash]; !ok {
 		return RecordNotFoundErr
 	}
-	offset := p.recordOffsets[keyHash]
+	if len(p.recordKeyOffsets[keyHash]) == 0 {
+		return RecordNotFoundErr
+	}
+	offset := p.recordKeyOffsets[keyHash][len(p.recordKeyOffsets[keyHash])-1]
 	return p.ReadByOffset(offset, headOnly, r)
 }
 
@@ -326,31 +327,83 @@ func (p *Pouch) WriteRecord(record *Record) (int64, error) {
 	return offset, nil
 }
 
+// Truncate - removes all records whose offset is greater or equal to offset. the removal is permanently.
+func (p *Pouch) Truncate(_dumpOffset int64) error {
+	p.fileMutex.Lock()
+	defer p.fileMutex.Unlock()
+	if p.closed {
+		return ClosedErr
+	}
+
+	info, err := os.Stat(p.name)
+	if err != nil {
+		return fmt.Errorf("can't get file info from file: %w", err)
+	}
+	currentOffset := info.Size()
+	if currentOffset <= _dumpOffset {
+		return fmt.Errorf("can't truncate pouch. _dumpOffset to big")
+	}
+	p.dataMutex.Lock()
+	defer p.dataMutex.Unlock()
+
+	if err := p.file.Truncate(_dumpOffset); err != nil {
+		return fmt.Errorf("can't truncate file: %w", err)
+	}
+
+	newRecordOffsets := make([]int64, 0, len(p.recordOffsets))
+	for _, recordOffset := range p.recordOffsets {
+		if recordOffset >= _dumpOffset {
+			break
+		}
+		newRecordOffsets = append(newRecordOffsets, recordOffset)
+	}
+	newRecordKeyOffsets := make(map[uint64][]int64)
+	for keyHash, recordOffsets := range p.recordKeyOffsets {
+		if len(recordOffsets) == 0 {
+			continue
+		}
+		for _, recordOffset := range recordOffsets {
+			if recordOffset >= _dumpOffset {
+				continue
+			}
+			newRecordKeyOffsets[keyHash] = append(newRecordKeyOffsets[keyHash], recordOffset)
+		}
+	}
+
+	p.recordOffsets = newRecordOffsets
+	p.recordKeyOffsets = newRecordKeyOffsets
+
+	return nil
+}
+
 // Size returns the byte size of the pouch file
 func (p *Pouch) Size() (int64, error) {
-	if p.closed {
-		return 0, ClosedErr
-	}
-	fileInfo, err := p.file.Stat()
+	// can't use seek function since file is append mode - use os.Stat instead
+	info, err := os.Stat(p.name)
 	if err != nil {
-		return 0, fmt.Errorf("can't get pouch file info: %w", err)
+		return 0, err
 	}
-	return fileInfo.Size(), nil
+	return info.Size(), nil
 }
 
 // LastOffset returns the offset of the last record which was written to the pouch file
 func (p *Pouch) LastOffset() int64 {
 	p.dataMutex.RLock()
 	defer p.dataMutex.RUnlock()
-	return p.lastWrittenOffset
+	if n := p.Count(); n > 0 {
+		return p.recordOffsets[n-1]
+	}
+	return 0
 }
 
 func (p *Pouch) LastOffsets() []int64 {
 	p.dataMutex.RLock()
 	defer p.dataMutex.RUnlock()
-	offsets := make([]int64, 0, len(p.recordOffsets))
-	for _, offset := range p.recordOffsets {
-		offsets = append(offsets, offset)
+	offsets := make([]int64, 0, len(p.recordKeyOffsets))
+	for _, recordOffsets := range p.recordKeyOffsets {
+		if len(recordOffsets) > 0 {
+			offsets = append(offsets, recordOffsets[len(recordOffsets)-1])
+		}
 	}
 	sort.Slice(offsets, func(i, j int) bool {
 		return offsets[i] < offsets[j]
@@ -362,11 +415,15 @@ func (p *Pouch) LastOffsets() []int64 {
 func (p *Pouch) LastOffsetForKey(key Key) (int64, error) {
 	p.dataMutex.RLock()
 	defer p.dataMutex.RUnlock()
-	if _, ok := p.recordOffsets[key.Hash()]; !ok {
+	if _, ok := p.recordKeyOffsets[key.Hash()]; !ok {
 		return 0, KeyNotFoundErr
 	}
+	if len(p.recordKeyOffsets[key.Hash()]) == 0 {
+		return 0, KeyNotFoundErr
+	}
+	recordOffsets := p.recordKeyOffsets[key.Hash()]
 
-	return p.recordOffsets[key.Hash()], nil
+	return recordOffsets[len(recordOffsets)-1], nil
 }
 
 // IsClosed returns true if the pouch is already closed
@@ -376,7 +433,7 @@ func (p *Pouch) IsClosed() bool {
 
 // Count returns the amount of records in the pouch
 func (p *Pouch) Count() uint64 {
-	return p.recordCount
+	return uint64(len(p.recordOffsets))
 }
 
 // Snapshot creates a snapshot of the current pouch. the pouch file content will be copied to a new file called name

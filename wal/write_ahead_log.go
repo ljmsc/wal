@@ -44,11 +44,16 @@ func Open(name string, maxFileSize uint64, headOnly bool, handler func(e Entry) 
 		if err := entry.Validate(); err != nil {
 			return EntryNotValidErr{Err: err}
 		}
-		if err := handler(entry); err != nil {
-			return fmt.Errorf("can't execute handler for entry: %w", err)
+		if handler != nil {
+			if err := handler(entry); err != nil {
+				return fmt.Errorf("can't execute handler for entry: %w", err)
+			}
 		}
 
 		w.latestVersions[entry.Key.Hash()] = entry.Version()
+		if _, ok := w.keyVersionSeqNumbers[entry.Key.Hash()]; !ok {
+			w.keyVersionSeqNumbers[entry.Key.Hash()] = make(map[uint64]uint64)
+		}
 		w.keyVersionSeqNumbers[entry.Key.Hash()][entry.Version()] = entry.SequenceNumber()
 		return nil
 	})
@@ -238,12 +243,55 @@ func (w *Wal) ReadByKeyAndVersion(key pouch.Key, version uint64, headOnly bool, 
 	return nil
 }
 
+// Dump - removes all entries whose sequence number is greater or equal to seqNum. the removal is permanently.
+// If want to delete an entry in the wal use Write() with an empty value and compress the wal.
+func (w *Wal) Dump(_dumpSeqNum uint64) error {
+	w.dataMutex.Lock()
+	defer w.dataMutex.Unlock()
+
+	if err := w.bucket.Dump(_dumpSeqNum); err != nil {
+		return fmt.Errorf("can't dump wal: %w", err)
+	}
+
+	newLatestKeyVersion := make(map[uint64]uint64)
+	for keyHash, versionSeqNum := range w.keyVersionSeqNumbers {
+		for version, seqNum := range versionSeqNum {
+			if seqNum >= _dumpSeqNum {
+				delete(w.keyVersionSeqNumbers[keyHash], version)
+				continue
+			}
+			if curVersion, ok := newLatestKeyVersion[keyHash]; ok {
+				if curVersion > version {
+					continue
+				}
+			}
+			newLatestKeyVersion[keyHash] = version
+		}
+	}
+
+	for keyHash, version := range newLatestKeyVersion {
+		w.latestVersions[keyHash] = version
+	}
+
+	return nil
+}
+
 // StreamEntries streams entries from the log into the returning channel. startSeqNum defines the beginning.
 // startSeqNum = 1 for all entries
 // endSeqNum = 0 for all entries
 func (w *Wal) StreamEntries(startSeqNum uint64, endSeqNum uint64, headOnly bool) <-chan Envelope {
 	recordStream := w.bucket.StreamRecords(startSeqNum, endSeqNum, headOnly)
 	return convertRecordStream(recordStream)
+}
+
+// LatestSequenceNumber .
+func (w *Wal) LatestSequenceNumber() uint64 {
+	return w.bucket.LatestSequenceNumber()
+}
+
+// LatestSequenceNumbers .
+func (w *Wal) LatestSequenceNumbers() []uint64 {
+	return w.bucket.LatestSequenceNumbers()
 }
 
 // StreamLatestEntries .

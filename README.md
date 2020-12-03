@@ -5,7 +5,7 @@
 wal is a write ahead log written in go.
 
 ## Installation
-At least go version `1.13` is required.
+At least go version `1.15` is required.
 ```
 go get -u github.com/ljmsc/wal
 ```
