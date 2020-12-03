@@ -1,6 +1,7 @@
 package pouch
 
 import (
+	"fmt"
 	"strconv"
 	"testing"
 
@@ -30,5 +31,6 @@ func TestCompressSegmentToFile(t *testing.T) {
 	err := CompressToFile(seg, targetSeg)
 	assert.NoError(t, err)
 
-	assert.EqualValues(t, 5, targetSeg.Count())
+	assert.EqualValues(t, uint64(5), targetSeg.Count())
+	fmt.Println(targetSeg.Count())
 }

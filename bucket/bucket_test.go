@@ -150,6 +150,7 @@ func TestCompressBucket(t *testing.T) {
 	prepare(bucketTestDir)
 	defer cleanup(bucketTestDir)
 	b := createTestBucket("compressor", bucketTestDir)
+	defer b.Close()
 
 	for i := 1; i <= 200; i++ {
 		keySuffix := ((i - 1) % 5) + 1
@@ -169,4 +170,38 @@ func TestCompressBucket(t *testing.T) {
 	assert.NoError(t, err)
 
 	assert.LessOrEqual(t, sizeAfter, sizeBefore)
+}
+
+func TestDumpBucket(t *testing.T) {
+	prepare(bucketTestDir)
+	defer cleanup(bucketTestDir)
+	b := createTestBucket("dump", bucketTestDir)
+	defer b.Close()
+
+	for i := 1; i <= 20; i++ {
+		testKey := []byte("test_key_" + strconv.Itoa(i))
+		testData := []byte("test_data_" + strconv.Itoa(i))
+
+		err := b.Write(testKey, testData)
+		assert.NoError(t, err)
+	}
+
+	seqNumbers := b.LatestSequenceNumbers()
+	assert.EqualValues(t, 20, len(seqNumbers))
+
+	dumpNum := seqNumbers[10]
+
+	err := b.Dump(dumpNum)
+	assert.NoError(t, err)
+
+	r := Record{}
+	err = b.ReadBySequenceNumber(dumpNum, true, &r)
+	assert.EqualError(t, err, RecordNotFoundErr.Error())
+
+	r2 := Record{}
+	err = b.ReadBySequenceNumber(b.LatestSequenceNumber(), true, &r2)
+	assert.Error(t, err)
+
+	seqNumbers2 := b.LatestSequenceNumbers()
+	assert.EqualValues(t, 10, len(seqNumbers2))
 }

@@ -54,6 +54,7 @@ type Envelope struct {
 
 // RecordPosition .
 type RecordPosition struct {
-	Offset int64
-	Pouch  *pouch.Pouch
+	KeyHash uint64
+	Offset  int64
+	Pouch   *pouch.Pouch
 }

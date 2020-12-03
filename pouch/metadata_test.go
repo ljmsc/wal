@@ -5,6 +5,8 @@ import (
 	"strconv"
 	"testing"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/stretchr/testify/assert"
 )
 
@@ -41,4 +43,19 @@ func TestMetadata(t *testing.T) {
 	}
 
 	assert.EqualValues(t, metadataTest, m)
+}
+
+func TestMetaPutDataIn(t *testing.T) {
+	tm := Metadata{}
+	tm.MetaPutString("stringKey", "test123")
+	tm.MetaPutUint64("uint64Key", 1337)
+
+	metaBytes := tm.Bytes()
+
+	tmParse := Metadata{}
+	err := ParseMetadata(metaBytes, tmParse)
+	require.NoError(t, err)
+
+	assert.EqualValues(t, "test123", tmParse.GetString("stringKey"), "String")
+	assert.EqualValues(t, uint64(1337), tmParse.GetUint64("uint64Key"), "uint64")
 }

@@ -129,24 +129,40 @@ func (m Metadata) GetString(name string) string {
 	return string(m.Get(name))
 }
 
-func MetaPutUint64(name string, value uint64, metadata Metadata) {
+func (m Metadata) MetaPutUint64(name string, value uint64) {
 	valueBytes := make([]byte, int64Bytes)
 	binary.LittleEndian.PutUint64(valueBytes, value)
-	metadata[name] = valueBytes
+	m[name] = valueBytes
+}
+
+func (m Metadata) MetaPutUint32(name string, value uint32) {
+	valueBytes := make([]byte, int32Bytes)
+	binary.LittleEndian.PutUint32(valueBytes, value)
+	m[name] = valueBytes
+}
+
+func (m Metadata) MetaPutUint16(name string, value uint16) {
+	valueBytes := make([]byte, int16Bytes)
+	binary.LittleEndian.PutUint16(valueBytes, value)
+	m[name] = valueBytes
+}
+
+func (m Metadata) MetaPutString(name, value string) {
+	m[name] = []byte(value)
+}
+
+func MetaPutUint64(name string, value uint64, metadata Metadata) {
+	metadata.MetaPutUint64(name, value)
 }
 
 func MetaPutUint32(name string, value uint32, metadata Metadata) {
-	valueBytes := make([]byte, int32Bytes)
-	binary.LittleEndian.PutUint32(valueBytes, value)
-	metadata[name] = valueBytes
+	metadata.MetaPutUint32(name, value)
 }
 
 func MetaPutUint16(name string, value uint16, metadata Metadata) {
-	valueBytes := make([]byte, int16Bytes)
-	binary.LittleEndian.PutUint16(valueBytes, value)
-	metadata[name] = valueBytes
+	metadata.MetaPutUint16(name, value)
 }
 
 func MetaPutString(name string, value string, metadata Metadata) {
-	metadata[name] = []byte(value)
+	metadata.MetaPutString(name, value)
 }

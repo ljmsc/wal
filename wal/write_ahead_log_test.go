@@ -169,6 +169,68 @@ func TestWalCompressWithFilter(t *testing.T) {
 	}
 }
 
-func TestWalCompareAndWrite(t *testing.T) {
+func TestWalReopen(t *testing.T) {
+	prepare(walTestDir)
+	defer cleanup(walTestDir)
 
+	w := createTestLog("test_read_write_reopen", walTestDir)
+
+	for i := 1; i <= 10; i++ {
+		eKey := []byte("key_" + strconv.Itoa(i))
+		eData := []byte("data_" + strconv.Itoa(i))
+		entry := CreateEntry(eKey, eData)
+		err := w.Write(entry)
+		assert.NoError(t, err)
+	}
+	err := w.Close()
+	require.NoError(t, err, "can't close wal")
+
+	w2, err := Open(walTestDir+"test_read_write_reopen", 500, true, nil)
+	require.NoError(t, err, "can't reopen wal")
+
+	eKey := []byte("key_1")
+	eData := []byte("data_1")
+	we := CreateEntry(eKey, eData)
+
+	err = w2.Write(we)
+	assert.NoError(t, err)
+
+	re := Entry{}
+	err = w2.ReadBySequenceNumber(11, true, &re)
+	assert.NoError(t, err)
+	assert.EqualValues(t, uint64(2), re.Version())
+
+}
+
+func TestDumpWal(t *testing.T) {
+	prepare(walTestDir)
+	defer cleanup(walTestDir)
+
+	w := createTestLog("test_read_write_reopen", walTestDir)
+	defer w.Close()
+
+	for i := 1; i <= 10; i++ {
+		eKey := []byte("key_" + strconv.Itoa(i))
+		eData := []byte("data_" + strconv.Itoa(i))
+		entry := CreateEntry(eKey, eData)
+		err := w.Write(entry)
+		assert.NoError(t, err)
+	}
+
+	seqNumbers := w.LatestSequenceNumbers()
+	assert.EqualValues(t, 10, len(seqNumbers))
+
+	e := Entry{}
+	err := w.ReadBySequenceNumber(seqNumbers[5], true, &e)
+	assert.NoError(t, err)
+
+	err = w.Dump(seqNumbers[5])
+	assert.NoError(t, err)
+
+	e2 := Entry{}
+	err = w.ReadBySequenceNumber(seqNumbers[5], true, &e2)
+	assert.EqualError(t, err, EntryNotFoundErr.Error())
+
+	seqNumbers2 := w.LatestSequenceNumbers()
+	assert.EqualValues(t, 5, len(seqNumbers2))
 }

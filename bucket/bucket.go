@@ -32,7 +32,7 @@ type Bucket struct {
 	// recordSequenceNumbers stores the pouch and offset for a sequence number
 	recordSequenceNumbers map[uint64]RecordPosition
 	// recordKeys - the map key is the hash value of the record Key and the value is the bucket sequence number
-	recordKeys map[uint64]uint64
+	recordKeys map[uint64][]uint64
 	// writeMutex is a mutex to protect the write operations to the pouches
 	writeMutex sync.Mutex
 	// closed
@@ -62,7 +62,7 @@ func Open(name string, maxPouchSize uint64, headOnly bool, handler func(r Record
 		firstSequenceNumber:   0,
 		dataMutex:             sync.RWMutex{},
 		recordSequenceNumbers: make(map[uint64]RecordPosition),
-		recordKeys:            make(map[uint64]uint64),
+		recordKeys:            make(map[uint64][]uint64),
 		writeMutex:            sync.Mutex{},
 		closed:                false,
 		maxPouchSize:          maxPouchSize,
@@ -78,7 +78,7 @@ func Open(name string, maxPouchSize uint64, headOnly bool, handler func(r Record
 	c.pouchList = make([]*pouch.Pouch, 0, len(pouchNames)+5)
 
 	for _, pouchName := range pouchNames {
-		sequenceNumbers := make([]uint64, 0, 10)
+		sequenceNumbers := make([]uint64, 0, len(pouchNames)*10)
 		pou, err := pouch.OpenWithHandler(pouchName, headOnly, func(envelope pouch.Envelope) error {
 			r := Record{}
 			if err := toRecord(*envelope.Record, &r); err != nil {
@@ -96,9 +96,14 @@ func Open(name string, maxPouchSize uint64, headOnly bool, handler func(r Record
 				}
 			}
 
-			c.recordKeys[keyHash] = r.SequenceNumber()
+			if _, ok := c.recordKeys[keyHash]; !ok {
+				c.recordKeys[keyHash] = make([]uint64, 0, 10)
+			}
+
+			c.recordKeys[keyHash] = append(c.recordKeys[keyHash], r.SequenceNumber())
 			c.recordSequenceNumbers[r.SequenceNumber()] = RecordPosition{
-				Offset: envelope.Offset,
+				KeyHash: envelope.Record.Key.Hash(),
+				Offset:  envelope.Offset,
 			}
 
 			if r.SequenceNumber() > c.latestSequenceNumber {
@@ -118,8 +123,9 @@ func Open(name string, maxPouchSize uint64, headOnly bool, handler func(r Record
 		for _, sequenceNumber := range sequenceNumbers {
 			if recordPosition, ok := c.recordSequenceNumbers[sequenceNumber]; ok {
 				c.recordSequenceNumbers[sequenceNumber] = RecordPosition{
-					Offset: recordPosition.Offset,
-					Pouch:  pou,
+					KeyHash: recordPosition.KeyHash,
+					Offset:  recordPosition.Offset,
+					Pouch:   pou,
 				}
 			}
 		}
@@ -278,10 +284,14 @@ func (b *Bucket) write(r *Record) error {
 		}
 	}
 
-	b.recordKeys[r.Key.Hash()] = r.SequenceNumber()
+	if _, ok := b.recordKeys[r.Key.Hash()]; !ok {
+		b.recordKeys[r.Key.Hash()] = make([]uint64, 0, 10)
+	}
+	b.recordKeys[r.Key.Hash()] = append(b.recordKeys[r.Key.Hash()], r.SequenceNumber())
 	b.recordSequenceNumbers[r.SequenceNumber()] = RecordPosition{
-		Offset: recordOffset,
-		Pouch:  latestPouch,
+		KeyHash: r.Key.Hash(),
+		Offset:  recordOffset,
+		Pouch:   latestPouch,
 	}
 	b.latestSequenceNumber++
 
@@ -405,13 +415,77 @@ func (b *Bucket) WriteRecord(r *Record) error {
 	return b.write(r)
 }
 
+// Dump - removes all entries whose sequence number is greater or equal to seqNum. the removal is permanently.
+// If want to delete an entry use Write() with empty data and compress the bucket.
+func (b *Bucket) Dump(_seqNum uint64) error {
+	b.writeMutex.Lock()
+	defer b.writeMutex.Unlock()
+	if b.closed {
+		return ClosedErr
+	}
+	b.dataMutex.Lock()
+	defer b.dataMutex.Unlock()
+	truncPouchOffsets := make(map[*pouch.Pouch]int64)
+	stripKeys := make([]uint64, 0, 10)
+	for i := _seqNum; i <= b.latestSequenceNumber; i++ {
+		if _, ok := b.recordSequenceNumbers[i]; !ok {
+			continue
+		}
+		recordPos := b.recordSequenceNumbers[i]
+		stripKeys = append(stripKeys, recordPos.KeyHash)
+		delete(b.recordSequenceNumbers, i)
+		if offset, ok := truncPouchOffsets[recordPos.Pouch]; ok {
+			if offset < recordPos.Offset {
+				continue
+			}
+		}
+		truncPouchOffsets[recordPos.Pouch] = recordPos.Offset
+	}
+
+	for pou, offset := range truncPouchOffsets {
+		if err := pou.Truncate(offset); err != nil {
+			return fmt.Errorf("can't truncate pouch: %w", err)
+		}
+	}
+
+	for _, keyHash := range stripKeys {
+		if _, ok := b.recordKeys[keyHash]; !ok {
+			continue
+		}
+		keySeqNumbers := b.recordKeys[keyHash]
+		newKeySeqNumbers := make([]uint64, 0, len(keySeqNumbers))
+		for _, keySeqNum := range keySeqNumbers {
+			if keySeqNum >= _seqNum {
+				break
+			}
+			newKeySeqNumbers = append(newKeySeqNumbers, keySeqNum)
+		}
+
+		b.recordKeys[keyHash] = newKeySeqNumbers
+	}
+
+	b.latestSequenceNumber = _seqNum
+
+	return nil
+}
+
+// LatestSequenceNumbers returns the latest sequence numbers for all written keys
+func (b *Bucket) LatestSequenceNumber() uint64 {
+	b.dataMutex.RLock()
+	defer b.dataMutex.RUnlock()
+	return b.latestSequenceNumber
+}
+
 // LatestSequenceNumbers returns the latest sequence numbers for all written keys
 func (b *Bucket) LatestSequenceNumbers() []uint64 {
 	b.dataMutex.RLock()
 	defer b.dataMutex.RUnlock()
 	sequenceNumbers := make([]uint64, 0, len(b.recordKeys))
-	for _, sequenceNumber := range b.recordKeys {
-		sequenceNumbers = append(sequenceNumbers, sequenceNumber)
+	for _, keySequenceNumbers := range b.recordKeys {
+		if len(keySequenceNumbers) == 0 {
+			continue
+		}
+		sequenceNumbers = append(sequenceNumbers, keySequenceNumbers[len(keySequenceNumbers)-1])
 	}
 	sort.Slice(sequenceNumbers, func(i, j int) bool {
 		return sequenceNumbers[i] < sequenceNumbers[j]
