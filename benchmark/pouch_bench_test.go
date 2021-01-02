@@ -2,6 +2,7 @@ package benchmark
 
 import (
 	"math/rand"
+	"os"
 	"strconv"
 	"testing"
 
@@ -10,9 +11,40 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-var benchTestDir = "../tmp/pouch_bench/"
+const (
+	benchTestDir       = "../tmp/pouch_bench/"
+	benchBasicTestDir  = "../tmp/basic_bench/"
+	benchBasicTestFile = "../tmp/basic_bench/basic.tmp"
 
-func benchmarkPouchWrite(loops int, b *testing.B) {
+	writeLoops = 100
+)
+
+func BenchmarkKeyHash(b *testing.B) {
+	testKey := pouch.Key("key_test")
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = testKey.Hash()
+	}
+}
+
+func BenchmarkBasicWrite(b *testing.B) {
+	prepare(benchBasicTestDir)
+	defer cleanup(benchBasicTestDir)
+
+	basicFile, err := os.Create(benchBasicTestFile)
+	require.NoError(b, err)
+	defer basicFile.Close()
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, err := basicFile.Write([]byte("key_" + strconv.Itoa(i+1) + "_" + "data_" + strconv.Itoa(i+1)))
+		if err != nil {
+			assert.NoError(b, err)
+		}
+	}
+}
+
+func BenchmarkPouchWrite(b *testing.B) {
 	prepare(benchTestDir)
 	defer cleanup(benchTestDir)
 	pou, err := pouch.Open(benchTestDir + "test_bench_write")
@@ -20,92 +52,112 @@ func benchmarkPouchWrite(loops int, b *testing.B) {
 	defer pou.Close()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		for j := 0; j < loops; j++ {
-			_, err := pou.Write([]byte("key_"+strconv.Itoa((i+1)+j)), []byte("data_"+strconv.Itoa((i+1)+j)))
+		_, err := pou.Write([]byte("key_"+strconv.Itoa(i+1)), []byte("data_"+strconv.Itoa(i+1)))
+		if err != nil {
 			assert.NoError(b, err)
 		}
-
 	}
 }
 
-func BenchmarkPouchWrite1(b *testing.B) {
-	benchmarkPouchWrite(1, b)
+func BenchmarkBasicRead(b *testing.B) {
+	prepare(benchBasicTestDir)
+	defer cleanup(benchBasicTestDir)
+
+	basicFile, err := os.OpenFile(benchBasicTestFile, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0600)
+	//basicFile, err := os.Create(benchBasicTestFile)
+	require.NoError(b, err)
+	defer basicFile.Close()
+
+	offsets := make([]int64, 0, writeLoops)
+	for j := 0; j < writeLoops; j++ {
+		offset, _ := basicFile.Seek(0, 1)
+		data := []byte("key_" + strconv.Itoa(j) + "_" + "data_" + strconv.Itoa(j))
+		_, err := basicFile.Write(data)
+		assert.NoError(b, err)
+
+		err = basicFile.Sync()
+		assert.NoError(b, err)
+		offsets = append(offsets, offset)
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		randOffset := int64(rand.Intn(len(offsets) - 1))
+		data := make([]byte, 12)
+		_, err := basicFile.ReadAt(data, randOffset)
+		if err != nil {
+			assert.NoError(b, err)
+		}
+	}
 }
 
-func BenchmarkPouchWrite100(b *testing.B) {
-	benchmarkPouchWrite(100, b)
-}
-
-func BenchmarkPouchWrite1000(b *testing.B) {
-	benchmarkPouchWrite(1000, b)
-}
-
-func benchmarkPouchRead(loops int, b *testing.B) {
+func BenchmarkPouchRead(b *testing.B) {
 	prepare(benchTestDir)
 	defer cleanup(benchTestDir)
 	pou, err := pouch.Open(benchTestDir + "test_bench_read")
 	require.NoError(b, err)
 	defer pou.Close()
 
-	for i := 0; i < loops; i++ {
+	for i := 0; i < writeLoops; i++ {
 		_, err := pou.Write([]byte("key_"+strconv.Itoa(i)), []byte("data_"+strconv.Itoa(i)))
 		assert.NoError(b, err)
 	}
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		for j := 0; j < loops; j++ {
-			randKeyIndex := rand.Intn(loops)
-			r := pouch.Record{}
-			err := pou.ReadByKey([]byte("key_"+strconv.Itoa(randKeyIndex)), false, &r)
+		randKeyIndex := rand.Intn(writeLoops)
+		r := pouch.Record{}
+		err := pou.ReadByKey([]byte("key_"+strconv.Itoa(randKeyIndex)), false, &r)
+		if err != nil {
 			assert.NoError(b, err)
 		}
 	}
 }
 
-func BenchmarkPouchRead1(b *testing.B) {
-	benchmarkPouchRead(1, b)
-}
-
-func BenchmarkPouchRead100(b *testing.B) {
-	benchmarkPouchRead(100, b)
-}
-
-func BenchmarkPouchRead1000(b *testing.B) {
-	benchmarkPouchRead(1000, b)
-}
-
-func benchmarkPouchReadHeadOnly(loops int, b *testing.B) {
+func BenchmarkPouchReadHeadOnly(b *testing.B) {
 	prepare(benchTestDir)
 	defer cleanup(benchTestDir)
 	pou, err := pouch.Open(benchTestDir + "test_bench_read")
 	require.NoError(b, err)
 	defer pou.Close()
 
-	for i := 0; i < loops; i++ {
+	for i := 0; i < writeLoops; i++ {
 		_, err := pou.Write([]byte("key_"+strconv.Itoa(i)), []byte("data_"+strconv.Itoa(i)))
 		assert.NoError(b, err)
 	}
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		for j := 0; j < loops; j++ {
-			randKeyIndex := rand.Intn(loops)
-			r := pouch.Record{}
-			err := pou.ReadByKey([]byte("key_"+strconv.Itoa(randKeyIndex)), true, &r)
+		randKeyIndex := rand.Intn(writeLoops)
+		r := pouch.Record{}
+		err := pou.ReadByKey([]byte("key_"+strconv.Itoa(randKeyIndex)), true, &r)
+		if err != nil {
 			assert.NoError(b, err)
 		}
 	}
 }
 
-func BenchmarkPouchReadHeadOnly1(b *testing.B) {
-	benchmarkPouchReadHeadOnly(1, b)
-}
+func BenchmarkPouchReadByOffset(b *testing.B) {
+	prepare(benchTestDir)
+	defer cleanup(benchTestDir)
+	pou, err := pouch.Open(benchTestDir + "test_bench_read")
+	require.NoError(b, err)
+	defer pou.Close()
 
-func BenchmarkPouchReadHeadOnly100(b *testing.B) {
-	benchmarkPouchReadHeadOnly(100, b)
-}
+	offsets := make([]int64, 0, writeLoops)
+	for i := 0; i < writeLoops; i++ {
+		offset, err := pou.Write([]byte("key_"+strconv.Itoa(i)), []byte("data_"+strconv.Itoa(i)))
+		offsets = append(offsets, offset)
+		assert.NoError(b, err)
+	}
 
-func BenchmarkPouchReadHeadOnly1000(b *testing.B) {
-	benchmarkPouchReadHeadOnly(1000, b)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		randIndex := rand.Intn(writeLoops)
+		r := pouch.Record{}
+		err := pou.ReadByOffset(offsets[randIndex], false, &r)
+		if err != nil {
+			assert.NoError(b, err)
+		}
+	}
 }
