@@ -9,8 +9,29 @@ import (
 	"github.com/ljmsc/wal/segment"
 )
 
-// Wal is a write ahead log
-type Wal struct {
+type Wal interface {
+	Write(e *Entry) error
+	WriteBytes(key segment.Key, data []byte) error
+	CompareAndWrite(version uint64, e *Entry) error
+	CompareAndWriteBytes(version uint64, key segment.Key, data []byte) error
+	ReadByKey(key segment.Key, headOnly bool, e *Entry) error
+	ReadBySequenceNumber(seqNum uint64, headOnly bool, e *Entry) error
+	ReadByKeyAndVersion(key segment.Key, version uint64, headOnly bool, e *Entry) error
+	Dump(_dumpSeqNum uint64) error
+	StreamEntries(startSeqNum uint64, endSeqNum uint64, headOnly bool) <-chan Envelope
+	LatestSequenceNumber() uint64
+	LatestSequenceNumbers() []uint64
+	StreamLatestEntries(headOnly bool) <-chan Envelope
+	Compress() error
+	CompressWithFilter(filter func(item *Entry) bool) error
+	Close() error
+	Remove() error
+	IsClosed() bool
+	Size() (int64, error)
+}
+
+// writeAheadLog is a write ahead log
+type writeAheadLog struct {
 	// bucket is the file storage for the write ahead log
 	bucket bucket.Bucket
 	// latestVersions stores for all key hashes the latest version of the entry
@@ -24,13 +45,13 @@ type Wal struct {
 }
 
 // OpenWithHandler .
-func OpenWithHandler(name string, headOnly bool, handler func(e Entry) error) (*Wal, error) {
+func OpenWithHandler(name string, headOnly bool, handler func(e Entry) error) (Wal, error) {
 	return Open(name, 0, headOnly, handler)
 }
 
 // Open opens a new or existing wal
-func Open(name string, maxFileSize uint64, headOnly bool, handler func(e Entry) error) (*Wal, error) {
-	w := Wal{
+func Open(name string, maxFileSize uint64, headOnly bool, handler func(e Entry) error) (Wal, error) {
+	w := writeAheadLog{
 		latestVersions:       make(map[uint64]uint64),
 		keyVersionSeqNumbers: make(map[uint64]map[uint64]uint64),
 		dataMutex:            sync.RWMutex{},
@@ -90,7 +111,7 @@ func convertRecordStream(recordStream <-chan bucket.Envelope) <-chan Envelope {
 }
 
 // Write writes a log entry to the write ahead log
-func (w *Wal) Write(e *Entry) error {
+func (w *writeAheadLog) Write(e *Entry) error {
 	w.dataMutex.RLock()
 	defer w.dataMutex.RUnlock()
 	if w.closed {
@@ -134,7 +155,7 @@ func (w *Wal) Write(e *Entry) error {
 }
 
 // WriteBytes writes a byte slice to the write ahead log
-func (w *Wal) WriteBytes(key segment.Key, data []byte) error {
+func (w *writeAheadLog) WriteBytes(key segment.Key, data []byte) error {
 	return w.Write(CreateEntry(key, data))
 }
 
@@ -142,7 +163,7 @@ func (w *Wal) WriteBytes(key segment.Key, data []byte) error {
 // if version > latest version => invalid version number
 // if version < latest version => version is to old, there is a newer version in the wal
 // if version == latest version => the given entry is written to the log
-func (w *Wal) CompareAndWrite(version uint64, e *Entry) error {
+func (w *writeAheadLog) CompareAndWrite(version uint64, e *Entry) error {
 	w.dataMutex.RLock()
 	if _, ok := w.latestVersions[e.Key.Hash()]; !ok {
 		w.dataMutex.RUnlock()
@@ -160,12 +181,12 @@ func (w *Wal) CompareAndWrite(version uint64, e *Entry) error {
 }
 
 // CompareAndWriteBytes .
-func (w *Wal) CompareAndWriteBytes(version uint64, key segment.Key, data []byte) error {
+func (w *writeAheadLog) CompareAndWriteBytes(version uint64, key segment.Key, data []byte) error {
 	return w.CompareAndWrite(version, CreateEntry(key, data))
 }
 
 // ReadByKey reads the latest version of an entry by key
-func (w *Wal) ReadByKey(key segment.Key, headOnly bool, e *Entry) error {
+func (w *writeAheadLog) ReadByKey(key segment.Key, headOnly bool, e *Entry) error {
 	w.dataMutex.RLock()
 	defer w.dataMutex.RUnlock()
 	if w.closed {
@@ -188,7 +209,7 @@ func (w *Wal) ReadByKey(key segment.Key, headOnly bool, e *Entry) error {
 }
 
 // ReadBySequenceNumber read an entry by the given sequence number
-func (w *Wal) ReadBySequenceNumber(seqNum uint64, headOnly bool, e *Entry) error {
+func (w *writeAheadLog) ReadBySequenceNumber(seqNum uint64, headOnly bool, e *Entry) error {
 	w.dataMutex.RLock()
 	defer w.dataMutex.RUnlock()
 	if w.closed {
@@ -210,7 +231,7 @@ func (w *Wal) ReadBySequenceNumber(seqNum uint64, headOnly bool, e *Entry) error
 	return nil
 }
 
-func (w *Wal) ReadByKeyAndVersion(key segment.Key, version uint64, headOnly bool, e *Entry) error {
+func (w *writeAheadLog) ReadByKeyAndVersion(key segment.Key, version uint64, headOnly bool, e *Entry) error {
 	w.dataMutex.RLock()
 	defer w.dataMutex.RUnlock()
 	if w.closed {
@@ -245,7 +266,7 @@ func (w *Wal) ReadByKeyAndVersion(key segment.Key, version uint64, headOnly bool
 
 // Dump - removes all entries whose sequence number is greater or equal to seqNum. the removal is permanently.
 // If want to delete an entry in the wal use Write() with an empty value and compress the wal.
-func (w *Wal) Dump(_dumpSeqNum uint64) error {
+func (w *writeAheadLog) Dump(_dumpSeqNum uint64) error {
 	w.dataMutex.Lock()
 	defer w.dataMutex.Unlock()
 
@@ -279,36 +300,36 @@ func (w *Wal) Dump(_dumpSeqNum uint64) error {
 // StreamEntries streams entries from the log into the returning channel. startSeqNum defines the beginning.
 // startSeqNum = 1 for all entries
 // endSeqNum = 0 for all entries
-func (w *Wal) StreamEntries(startSeqNum uint64, endSeqNum uint64, headOnly bool) <-chan Envelope {
+func (w *writeAheadLog) StreamEntries(startSeqNum uint64, endSeqNum uint64, headOnly bool) <-chan Envelope {
 	recordStream := w.bucket.StreamRecords(startSeqNum, endSeqNum, headOnly)
 	return convertRecordStream(recordStream)
 }
 
 // LatestSequenceNumber .
-func (w *Wal) LatestSequenceNumber() uint64 {
+func (w *writeAheadLog) LatestSequenceNumber() uint64 {
 	return w.bucket.LatestSequenceNumber()
 }
 
 // LatestSequenceNumbers .
-func (w *Wal) LatestSequenceNumbers() []uint64 {
+func (w *writeAheadLog) LatestSequenceNumbers() []uint64 {
 	return w.bucket.LatestSequenceNumbers()
 }
 
 // StreamLatestEntries .
-func (w *Wal) StreamLatestEntries(headOnly bool) <-chan Envelope {
+func (w *writeAheadLog) StreamLatestEntries(headOnly bool) <-chan Envelope {
 	recordStream := w.bucket.StreamLatestRecords(headOnly)
 	return convertRecordStream(recordStream)
 }
 
 // Compress compresses the log
-func (w *Wal) Compress() error {
+func (w *writeAheadLog) Compress() error {
 	return w.bucket.Compress()
 }
 
 // CompressWithFilter compresses the bucket based on a given filter
 // for filter = true remove item
 // for filter = false keep item
-func (w *Wal) CompressWithFilter(filter func(item *Entry) bool) error {
+func (w *writeAheadLog) CompressWithFilter(filter func(item *Entry) bool) error {
 	bucketFilter := func(item *bucket.Record) bool {
 		entry := Entry{}
 		if err := recordToEntry(*item, &entry); err != nil {
@@ -320,7 +341,7 @@ func (w *Wal) CompressWithFilter(filter func(item *Entry) bool) error {
 }
 
 // Close closes the log
-func (w *Wal) Close() error {
+func (w *writeAheadLog) Close() error {
 	w.dataMutex.Lock()
 	defer w.dataMutex.Unlock()
 	w.closed = true
@@ -328,7 +349,7 @@ func (w *Wal) Close() error {
 }
 
 // Remove removes the hole write ahead log from disk
-func (w *Wal) Remove() error {
+func (w *writeAheadLog) Remove() error {
 	w.dataMutex.RLock()
 	defer w.dataMutex.RUnlock()
 	if !w.closed {
@@ -338,11 +359,11 @@ func (w *Wal) Remove() error {
 }
 
 // IsClosed returns true if the log is already closed
-func (w *Wal) IsClosed() bool {
+func (w *writeAheadLog) IsClosed() bool {
 	return w.closed
 }
 
 // Size returns the size of the log in bytes
-func (w *Wal) Size() (int64, error) {
+func (w *writeAheadLog) Size() (int64, error) {
 	return w.bucket.Size()
 }
