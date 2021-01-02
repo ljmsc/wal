@@ -27,7 +27,7 @@ type Bucket struct {
 	dataMutex sync.RWMutex
 	// latestSequenceNumber is the last sequence number written to a pouch file in the bucket
 	latestSequenceNumber uint64
-	// firstSequenceNumber is the first sequence number in the bucket
+	// firstSequenceNumber is the first sequence number in the bucket. this changes during compression
 	firstSequenceNumber uint64
 	// recordSequenceNumbers stores the pouch and offset for a sequence number
 	recordSequenceNumbers map[uint64]RecordPosition

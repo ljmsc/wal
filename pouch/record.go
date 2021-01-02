@@ -46,7 +46,7 @@ func CreateRecord(key Key, data Data, metaRecords ...MetaRecord) *Record {
 	return CreateRecordWithMetadata(metadata, key, data)
 }
 
-// CreateRecord creates a new record
+// CreateRecordWithMetadata creates a new record
 func CreateRecordWithMetadata(metadata Metadata, key Key, data Data) *Record {
 	return &Record{
 		Metadata: metadata,
