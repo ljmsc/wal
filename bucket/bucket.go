@@ -15,8 +15,28 @@ const (
 	DefaultMaxSegmentSize = 1e9 // 1GB
 )
 
-// Bucket .
-type Bucket struct {
+type Bucket interface {
+	Name() string
+	Close() error
+	IsClosed() bool
+	ReadByHash(keyHash uint64, headOnly bool, r *Record) error
+	ReadByKey(key segment.Key, headOnly bool, r *Record) error
+	ReadBySequenceNumber(seqNum uint64, headOnly bool, r *Record) error
+	Write(key segment.Key, data segment.Data) error
+	WriteRecord(r *Record) error
+	Dump(_seqNum uint64) error
+	LatestSequenceNumber() uint64
+	LatestSequenceNumbers() []uint64
+	StreamRecords(startSeqNum uint64, endSeqNum uint64, headOnly bool) <-chan Envelope
+	StreamLatestRecords(headOnly bool) <-chan Envelope
+	Compress() error
+	CompressWithFilter(filter func(item *Record) bool) error
+	Size() (int64, error)
+	Remove() error
+}
+
+// bucket .
+type bucket struct {
 	// name is the name if the segment bucket. This is a filepath
 	name string
 	// store is a list of all segments in the segment bucket
@@ -42,21 +62,21 @@ type Bucket struct {
 }
 
 // OpenWithHandler .
-func OpenWithHandler(name string, headOnly bool, handler func(r Record) error) (*Bucket, error) {
+func OpenWithHandler(name string, headOnly bool, handler func(r Record) error) (Bucket, error) {
 	return Open(name, DefaultMaxSegmentSize, headOnly, handler)
 }
 
 // OpenWithSize .
-func OpenWithSize(name string, maxSegmentSize uint64) (*Bucket, error) {
+func OpenWithSize(name string, maxSegmentSize uint64) (Bucket, error) {
 	return Open(name, maxSegmentSize, true, nil)
 }
 
 // OpenWithSize .
-func Open(name string, maxSegmentSize uint64, headOnly bool, handler func(r Record) error) (*Bucket, error) {
+func Open(name string, maxSegmentSize uint64, headOnly bool, handler func(r Record) error) (Bucket, error) {
 	if maxSegmentSize == 0 {
 		maxSegmentSize = DefaultMaxSegmentSize
 	}
-	c := Bucket{
+	c := bucket{
 		name:                  name,
 		latestSequenceNumber:  0,
 		firstSequenceNumber:   0,
@@ -136,7 +156,7 @@ func Open(name string, maxSegmentSize uint64, headOnly bool, handler func(r Reco
 }
 
 // segmentName returns a segment name for the bucket
-func (b *Bucket) segmentName(startSeqNum uint64) string {
+func (b *bucket) segmentName(startSeqNum uint64) string {
 	return b.name + "_" + strconv.FormatUint(startSeqNum, 10)
 }
 
@@ -144,7 +164,7 @@ func (b *Bucket) segmentName(startSeqNum uint64) string {
 // 0 = latest
 // 1 = second latest
 // and so on
-func (b *Bucket) segment(listPosition uint64) (segment.Segment, error) {
+func (b *bucket) segment(listPosition uint64) (segment.Segment, error) {
 	listSize := uint64(len(b.segmentList))
 	if listSize == 0 {
 		if err := b.addSegment(); err != nil {
@@ -163,7 +183,7 @@ func (b *Bucket) segment(listPosition uint64) (segment.Segment, error) {
 	return b.segmentList[pos], nil
 }
 
-func (b *Bucket) addSegment() error {
+func (b *bucket) addSegment() error {
 	b.dataMutex.Lock()
 	defer b.dataMutex.Unlock()
 
@@ -183,7 +203,7 @@ func (b *Bucket) addSegment() error {
 	return nil
 }
 
-func (b *Bucket) readFromSegment(p segment.Segment, offset int64, headOnly bool, r *Record) error {
+func (b *bucket) readFromSegment(p segment.Segment, offset int64, headOnly bool, r *Record) error {
 	b.dataMutex.RLock()
 	defer b.dataMutex.RUnlock()
 	if b.closed {
@@ -201,7 +221,7 @@ func (b *Bucket) readFromSegment(p segment.Segment, offset int64, headOnly bool,
 	return nil
 }
 
-func (b *Bucket) read(hash uint64, headOnly bool, r *Record) error {
+func (b *bucket) read(hash uint64, headOnly bool, r *Record) error {
 	b.dataMutex.RLock()
 	defer b.dataMutex.RUnlock()
 	if b.closed {
@@ -237,7 +257,7 @@ func (b *Bucket) read(hash uint64, headOnly bool, r *Record) error {
 	return RecordNotFoundErr
 }
 
-func (b *Bucket) write(r *Record) error {
+func (b *bucket) write(r *Record) error {
 	b.writeMutex.Lock()
 	defer b.writeMutex.Unlock()
 	if b.closed {
@@ -301,7 +321,7 @@ func (b *Bucket) write(r *Record) error {
 // compress .
 // for filter = true remove item
 // for filter = false keep item
-func (b *Bucket) compress(filter func(item *Record) bool) error {
+func (b *bucket) compress(filter func(item *Record) bool) error {
 	b.dataMutex.RLock()
 	defer b.dataMutex.RUnlock()
 	if b.IsClosed() {
@@ -342,12 +362,12 @@ func (b *Bucket) compress(filter func(item *Record) bool) error {
 }
 
 // Name returns the name of the segment bucket
-func (b *Bucket) Name() string {
+func (b *bucket) Name() string {
 	return b.name
 }
 
 // Close closes the bucket for read and writes
-func (b *Bucket) Close() error {
+func (b *bucket) Close() error {
 	b.dataMutex.Lock()
 	defer b.dataMutex.Unlock()
 	b.writeMutex.Lock()
@@ -368,22 +388,22 @@ func (b *Bucket) Close() error {
 }
 
 // IsClosed returns true if the bucket is already closed
-func (b *Bucket) IsClosed() bool {
+func (b *bucket) IsClosed() bool {
 	return b.closed
 }
 
 // ReadByKey reads the latest record for a given key
-func (b *Bucket) ReadByHash(keyHash uint64, headOnly bool, r *Record) error {
+func (b *bucket) ReadByHash(keyHash uint64, headOnly bool, r *Record) error {
 	return b.read(keyHash, headOnly, r)
 }
 
 // ReadByKey reads the latest record for a given key
-func (b *Bucket) ReadByKey(key segment.Key, headOnly bool, r *Record) error {
+func (b *bucket) ReadByKey(key segment.Key, headOnly bool, r *Record) error {
 	return b.read(key.Hash(), headOnly, r)
 }
 
 // ReadBySequenceNumber reads a record by a given sequence number
-func (b *Bucket) ReadBySequenceNumber(seqNum uint64, headOnly bool, r *Record) error {
+func (b *bucket) ReadBySequenceNumber(seqNum uint64, headOnly bool, r *Record) error {
 	b.dataMutex.RLock()
 	defer b.dataMutex.RUnlock()
 	if _, ok := b.recordSequenceNumbers[seqNum]; !ok {
@@ -405,19 +425,19 @@ func (b *Bucket) ReadBySequenceNumber(seqNum uint64, headOnly bool, r *Record) e
 }
 
 // Write writes key and data as a record to the segment bucket
-func (b *Bucket) Write(key segment.Key, data segment.Data) error {
+func (b *bucket) Write(key segment.Key, data segment.Data) error {
 	r := CreateRecord(key, data)
 	return b.WriteRecord(r)
 }
 
 // WriteRecord writes the given record to the segment bucket
-func (b *Bucket) WriteRecord(r *Record) error {
+func (b *bucket) WriteRecord(r *Record) error {
 	return b.write(r)
 }
 
 // Dump - removes all entries whose sequence number is greater or equal to seqNum. the removal is permanently.
 // If want to delete an entry use Write() with empty data and compress the bucket.
-func (b *Bucket) Dump(_seqNum uint64) error {
+func (b *bucket) Dump(_seqNum uint64) error {
 	b.writeMutex.Lock()
 	defer b.writeMutex.Unlock()
 	if b.closed {
@@ -470,14 +490,14 @@ func (b *Bucket) Dump(_seqNum uint64) error {
 }
 
 // LatestSequenceNumbers returns the latest sequence numbers for all written keys
-func (b *Bucket) LatestSequenceNumber() uint64 {
+func (b *bucket) LatestSequenceNumber() uint64 {
 	b.dataMutex.RLock()
 	defer b.dataMutex.RUnlock()
 	return b.latestSequenceNumber
 }
 
 // LatestSequenceNumbers returns the latest sequence numbers for all written keys
-func (b *Bucket) LatestSequenceNumbers() []uint64 {
+func (b *bucket) LatestSequenceNumbers() []uint64 {
 	b.dataMutex.RLock()
 	defer b.dataMutex.RUnlock()
 	sequenceNumbers := make([]uint64, 0, len(b.recordKeys))
@@ -496,7 +516,7 @@ func (b *Bucket) LatestSequenceNumbers() []uint64 {
 // StreamRecords streams records from the bucket into the returning channel. startSeqNum defines the beginning.
 // startSeqNum = 1 for all records
 // endSeqNum = 0 for all records
-func (b *Bucket) StreamRecords(startSeqNum uint64, endSeqNum uint64, headOnly bool) <-chan Envelope {
+func (b *bucket) StreamRecords(startSeqNum uint64, endSeqNum uint64, headOnly bool) <-chan Envelope {
 	stream := make(chan Envelope)
 	go func() {
 		b.dataMutex.RLock()
@@ -535,7 +555,7 @@ func (b *Bucket) StreamRecords(startSeqNum uint64, endSeqNum uint64, headOnly bo
 }
 
 // StreamLatestRecords returns a channel which will receive the latest records in the bucket. each key at least ones.
-func (b *Bucket) StreamLatestRecords(headOnly bool) <-chan Envelope {
+func (b *bucket) StreamLatestRecords(headOnly bool) <-chan Envelope {
 	stream := make(chan Envelope)
 	go func() {
 		sequenceNumbers := b.LatestSequenceNumbers()
@@ -554,7 +574,7 @@ func (b *Bucket) StreamLatestRecords(headOnly bool) <-chan Envelope {
 }
 
 // Compress compresses the bucket. at least one record for each key remains
-func (b *Bucket) Compress() error {
+func (b *bucket) Compress() error {
 	latestSeqNumbers := b.LatestSequenceNumbers()
 	latestSeqNumbersMap := make(map[uint64]struct{})
 	for _, number := range latestSeqNumbers {
@@ -571,12 +591,12 @@ func (b *Bucket) Compress() error {
 // CompressWithFilter compresses the bucket based on a given filter
 // for filter = true remove item
 // for filter = false keep item
-func (b *Bucket) CompressWithFilter(filter func(item *Record) bool) error {
+func (b *bucket) CompressWithFilter(filter func(item *Record) bool) error {
 	return b.compress(filter)
 }
 
 // Size returns the size of the bucket in bytes
-func (b *Bucket) Size() (int64, error) {
+func (b *bucket) Size() (int64, error) {
 	b.dataMutex.RLock()
 	defer b.dataMutex.RUnlock()
 	bSize := int64(0)
@@ -596,7 +616,7 @@ func (b *Bucket) Size() (int64, error) {
 }
 
 // Remove removes the bucket from disk
-func (b *Bucket) Remove() error {
+func (b *bucket) Remove() error {
 	b.dataMutex.RLock()
 	defer b.dataMutex.RUnlock()
 	if !b.closed {

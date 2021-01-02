@@ -9,7 +9,7 @@ import (
 
 type compressor struct {
 	// bucket is the bucket that is being compressed
-	bucket *Bucket
+	bucket *bucket
 	// segmentList stores the new created segments during the compression
 	segmentList []segment.Segment
 	// recordSequenceNumbers stores the segment and offset for a sequence number
@@ -23,7 +23,7 @@ type compressor struct {
 }
 
 // createCompressor creates a new compressor to compress the bucket
-func createCompressor(b *Bucket) (*compressor, error) {
+func createCompressor(b *bucket) (*compressor, error) {
 	c := compressor{
 		bucket:                b,
 		segmentList:           make([]segment.Segment, 0, len(b.segmentList)),

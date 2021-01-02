@@ -12,7 +12,7 @@ import (
 // Wal is a write ahead log
 type Wal struct {
 	// bucket is the file storage for the write ahead log
-	bucket *bucket.Bucket
+	bucket bucket.Bucket
 	// latestVersions stores for all key hashes the latest version of the entry
 	latestVersions map[uint64]uint64
 	// keyVersionSeqNumbers maps for a given hash key all existing versions to there sequence number in the bucket
