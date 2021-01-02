@@ -6,13 +6,13 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/ljmsc/wal/pouch"
+	"github.com/ljmsc/wal/segment"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 const (
-	benchTestDir       = "../tmp/pouch_bench/"
+	benchTestDir       = "../tmp/segment_bench/"
 	benchBasicTestDir  = "../tmp/basic_bench/"
 	benchBasicTestFile = "../tmp/basic_bench/basic.tmp"
 
@@ -20,7 +20,7 @@ const (
 )
 
 func BenchmarkKeyHash(b *testing.B) {
-	testKey := pouch.Key("key_test")
+	testKey := segment.Key("key_test")
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		_ = testKey.Hash()
@@ -44,10 +44,10 @@ func BenchmarkBasicWrite(b *testing.B) {
 	}
 }
 
-func BenchmarkPouchWrite(b *testing.B) {
+func BenchmarkSegmentWrite(b *testing.B) {
 	prepare(benchTestDir)
 	defer cleanup(benchTestDir)
-	pou, err := pouch.Open(benchTestDir + "test_bench_write")
+	pou, err := segment.Open(benchTestDir + "test_bench_write")
 	require.NoError(b, err)
 	defer pou.Close()
 	b.ResetTimer()
@@ -91,10 +91,10 @@ func BenchmarkBasicRead(b *testing.B) {
 	}
 }
 
-func BenchmarkPouchRead(b *testing.B) {
+func BenchmarkSegmentRead(b *testing.B) {
 	prepare(benchTestDir)
 	defer cleanup(benchTestDir)
-	pou, err := pouch.Open(benchTestDir + "test_bench_read")
+	pou, err := segment.Open(benchTestDir + "test_bench_read")
 	require.NoError(b, err)
 	defer pou.Close()
 
@@ -106,7 +106,7 @@ func BenchmarkPouchRead(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		randKeyIndex := rand.Intn(writeLoops)
-		r := pouch.Record{}
+		r := segment.Record{}
 		err := pou.ReadByKey([]byte("key_"+strconv.Itoa(randKeyIndex)), false, &r)
 		if err != nil {
 			assert.NoError(b, err)
@@ -114,10 +114,10 @@ func BenchmarkPouchRead(b *testing.B) {
 	}
 }
 
-func BenchmarkPouchReadHeadOnly(b *testing.B) {
+func BenchmarkSegmentReadHeadOnly(b *testing.B) {
 	prepare(benchTestDir)
 	defer cleanup(benchTestDir)
-	pou, err := pouch.Open(benchTestDir + "test_bench_read")
+	pou, err := segment.Open(benchTestDir + "test_bench_read")
 	require.NoError(b, err)
 	defer pou.Close()
 
@@ -129,7 +129,7 @@ func BenchmarkPouchReadHeadOnly(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		randKeyIndex := rand.Intn(writeLoops)
-		r := pouch.Record{}
+		r := segment.Record{}
 		err := pou.ReadByKey([]byte("key_"+strconv.Itoa(randKeyIndex)), true, &r)
 		if err != nil {
 			assert.NoError(b, err)
@@ -137,10 +137,10 @@ func BenchmarkPouchReadHeadOnly(b *testing.B) {
 	}
 }
 
-func BenchmarkPouchReadByOffset(b *testing.B) {
+func BenchmarkSegmentReadByOffset(b *testing.B) {
 	prepare(benchTestDir)
 	defer cleanup(benchTestDir)
-	pou, err := pouch.Open(benchTestDir + "test_bench_read")
+	pou, err := segment.Open(benchTestDir + "test_bench_read")
 	require.NoError(b, err)
 	defer pou.Close()
 
@@ -154,7 +154,7 @@ func BenchmarkPouchReadByOffset(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		randIndex := rand.Intn(writeLoops)
-		r := pouch.Record{}
+		r := segment.Record{}
 		err := pou.ReadByOffset(offsets[randIndex], false, &r)
 		if err != nil {
 			assert.NoError(b, err)

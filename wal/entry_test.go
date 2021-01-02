@@ -5,8 +5,8 @@ import (
 	"testing"
 
 	"github.com/ljmsc/wal/bucket"
+	"github.com/ljmsc/wal/segment"
 
-	"github.com/ljmsc/wal/pouch"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -14,7 +14,7 @@ func TestCreateEntry(t *testing.T) {
 	testKey := []byte("test_key")
 	testData := []byte("test_data")
 
-	entry := CreateEntry(testKey, testData, pouch.MetaRecord{
+	entry := CreateEntry(testKey, testData, segment.MetaRecord{
 		Name: "test1",
 		Data: nil,
 	})
@@ -45,10 +45,10 @@ func TestRecordToEntryToRecord(t *testing.T) {
 	binary.LittleEndian.PutUint64(versionBytes, testVersion)
 
 	record := bucket.CreateRecord(testKey, testData,
-		pouch.MetaRecord{
+		segment.MetaRecord{
 			Name: bucket.SequenceNumberMetadataKey,
 			Data: seqNumBytes,
-		}, pouch.MetaRecord{
+		}, segment.MetaRecord{
 			Name: VersionMetadataKey,
 			Data: versionBytes,
 		},
@@ -79,7 +79,7 @@ func TestEntryVersion(t *testing.T) {
 	seqNumBytes := make([]byte, 8)
 	binary.LittleEndian.PutUint64(seqNumBytes, 42)
 
-	entry := CreateEntry(testKey, testData, pouch.MetaRecord{
+	entry := CreateEntry(testKey, testData, segment.MetaRecord{
 		Name: bucket.SequenceNumberMetadataKey,
 		Data: seqNumBytes,
 	})

@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/ljmsc/wal/pouch"
+	"github.com/ljmsc/wal/segment"
 )
 
 const (
@@ -14,11 +14,11 @@ const (
 )
 
 type store struct {
-	// name of the pouch file
+	// name of the segment file
 	name string
-	// pou is the pouch file to store pouch names
-	pou *pouch.Pouch
-	// segmentNames is the list of pouch names in the record
+	// segment is the segment file to store segment names
+	segment segment.Segment
+	// segmentNames is the list of segment names in the record
 	segmentNames []string
 }
 
@@ -27,16 +27,16 @@ func openStore(name string) (*store, error) {
 	s := store{name: name}
 
 	var err error
-	s.pou, err = pouch.Open(name)
+	s.segment, err = segment.Open(name)
 	if err != nil {
-		return nil, fmt.Errorf("can't open chain store pouch file: %w", err)
+		return nil, fmt.Errorf("can't open chain store segment file: %w", err)
 	}
 
 	s.segmentNames = make([]string, 0, 5)
-	segmentListRecord := pouch.Record{}
-	if err := s.pou.ReadByKey([]byte(SegmentListKeyName), false, &segmentListRecord); err != nil {
-		if !errors.Is(err, pouch.RecordNotFoundErr) {
-			return nil, fmt.Errorf("can't read pouch list from store file: %w", err)
+	segmentListRecord := segment.Record{}
+	if err := s.segment.ReadByKey([]byte(SegmentListKeyName), false, &segmentListRecord); err != nil {
+		if !errors.Is(err, segment.RecordNotFoundErr) {
+			return nil, fmt.Errorf("can't read segment list from store file: %w", err)
 		}
 	}
 
@@ -49,7 +49,7 @@ func openStore(name string) (*store, error) {
 		listBytes = listBytes[MetaNameSize:]
 
 		if uint64(len(listBytes)) < nameSize {
-			return nil, fmt.Errorf("not enough bytes in pouch list record. name size: %d bytes: %d", nameSize, len(listBytes))
+			return nil, fmt.Errorf("not enough bytes in segment list record. name size: %d bytes: %d", nameSize, len(listBytes))
 		}
 
 		segmentName := string(listBytes[:nameSize])
@@ -77,8 +77,8 @@ func (s *store) update(nameList []string) error {
 		segmentListRecordData = append(segmentListRecordData, segmentNameBytes...)
 	}
 
-	if _, err := s.pou.Write([]byte(SegmentListKeyName), segmentListRecordData); err != nil {
-		return fmt.Errorf("can't write pouch name list to store: %w", err)
+	if _, err := s.segment.Write([]byte(SegmentListKeyName), segmentListRecordData); err != nil {
+		return fmt.Errorf("can't write segment name list to store: %w", err)
 	}
 
 	s.segmentNames = nameList
@@ -86,5 +86,5 @@ func (s *store) update(nameList []string) error {
 }
 
 func (s *store) close() error {
-	return s.pou.Close()
+	return s.segment.Close()
 }

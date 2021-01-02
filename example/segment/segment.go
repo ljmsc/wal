@@ -3,12 +3,12 @@ package main
 import (
 	"encoding/binary"
 
-	"github.com/ljmsc/wal/pouch"
+	"github.com/ljmsc/wal/segment"
 )
 
 func main() {
 
-	p, err := pouch.Open("./pouch/pouch_1")
+	s, err := segment.Open("./segment/segment_1")
 	if err != nil {
 		// handle error
 		panic(err)
@@ -17,7 +17,7 @@ func main() {
 	key := make([]byte, 0, 8)
 	binary.PutUvarint(key, 42)
 
-	if _, err := p.Write(key, []byte("mydata")); err != nil {
+	if _, err := s.Write(key, []byte("mydata")); err != nil {
 		// handle error
 		panic(err)
 	}

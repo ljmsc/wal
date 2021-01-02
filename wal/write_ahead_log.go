@@ -6,7 +6,7 @@ import (
 	"sync"
 
 	"github.com/ljmsc/wal/bucket"
-	"github.com/ljmsc/wal/pouch"
+	"github.com/ljmsc/wal/segment"
 )
 
 // Wal is a write ahead log
@@ -134,7 +134,7 @@ func (w *Wal) Write(e *Entry) error {
 }
 
 // WriteBytes writes a byte slice to the write ahead log
-func (w *Wal) WriteBytes(key pouch.Key, data []byte) error {
+func (w *Wal) WriteBytes(key segment.Key, data []byte) error {
 	return w.Write(CreateEntry(key, data))
 }
 
@@ -160,12 +160,12 @@ func (w *Wal) CompareAndWrite(version uint64, e *Entry) error {
 }
 
 // CompareAndWriteBytes .
-func (w *Wal) CompareAndWriteBytes(version uint64, key pouch.Key, data []byte) error {
+func (w *Wal) CompareAndWriteBytes(version uint64, key segment.Key, data []byte) error {
 	return w.CompareAndWrite(version, CreateEntry(key, data))
 }
 
 // ReadByKey reads the latest version of an entry by key
-func (w *Wal) ReadByKey(key pouch.Key, headOnly bool, e *Entry) error {
+func (w *Wal) ReadByKey(key segment.Key, headOnly bool, e *Entry) error {
 	w.dataMutex.RLock()
 	defer w.dataMutex.RUnlock()
 	if w.closed {
@@ -210,7 +210,7 @@ func (w *Wal) ReadBySequenceNumber(seqNum uint64, headOnly bool, e *Entry) error
 	return nil
 }
 
-func (w *Wal) ReadByKeyAndVersion(key pouch.Key, version uint64, headOnly bool, e *Entry) error {
+func (w *Wal) ReadByKeyAndVersion(key segment.Key, version uint64, headOnly bool, e *Entry) error {
 	w.dataMutex.RLock()
 	defer w.dataMutex.RUnlock()
 	if w.closed {

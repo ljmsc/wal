@@ -1,10 +1,10 @@
-package pouch
+package segment
 
 import (
 	"fmt"
 )
 
-func compress(p *Pouch, compression func(chan<- Envelope)) <-chan Envelope {
+func compress(p Segment, compression func(chan<- Envelope)) <-chan Envelope {
 	if p.IsClosed() {
 		return nil
 	}
@@ -14,7 +14,7 @@ func compress(p *Pouch, compression func(chan<- Envelope)) <-chan Envelope {
 }
 
 // CompressWithFilter returns a channel with all records based on given filter function
-func CompressWithFilter(p *Pouch, filter func(record *Record) bool) <-chan Envelope {
+func CompressWithFilter(p Segment, filter func(record *Record) bool) <-chan Envelope {
 	return compress(p, func(stream chan<- Envelope) {
 		recordStream := p.StreamRecords(false)
 		for {
@@ -31,9 +31,9 @@ func CompressWithFilter(p *Pouch, filter func(record *Record) bool) <-chan Envel
 	})
 }
 
-// CompressToFile writes the latest records in a pouch to a new pouch file
-func CompressToFile(oldPouch *Pouch, newPouch *Pouch) error {
-	stream := oldPouch.StreamLatestRecords(false)
+// CompressToFile writes the latest records in a segment to a new segment file
+func CompressToFile(_old Segment, _new Segment) error {
+	stream := _old.StreamLatestRecords(false)
 	if stream == nil {
 		return ClosedErr
 	}
@@ -52,9 +52,9 @@ func CompressToFile(oldPouch *Pouch, newPouch *Pouch) error {
 				Err:                  item.Err,
 			}
 		}
-		writtenOffset, err := newPouch.WriteRecord(item.Record)
+		writtenOffset, err := _new.WriteRecord(item.Record)
 		if err != nil {
-			return fmt.Errorf("can't write to pouch: %w", err)
+			return fmt.Errorf("can't write to segment: %w", err)
 		}
 		lastWrittenOffsetNew = writtenOffset
 		lastWrittenOffsetOld = item.Offset

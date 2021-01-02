@@ -4,54 +4,54 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/ljmsc/wal/pouch"
+	"github.com/ljmsc/wal/segment"
 )
 
 type compressor struct {
 	// bucket is the bucket that is being compressed
 	bucket *Bucket
-	// pouchList stores the new created pouches during the compression
-	pouchList []*pouch.Pouch
-	// recordSequenceNumbers stores the pouch and offset for a sequence number
+	// segmentList stores the new created segments during the compression
+	segmentList []segment.Segment
+	// recordSequenceNumbers stores the segment and offset for a sequence number
 	recordSequenceNumbers map[uint64]RecordPosition
 	// endSeqNum is the last sequence number for the compression
 	endSeqNum uint64
 	// bucketStartSeqNum is the smallest sequence number in the bucket after the compression
 	bucketStartSeqNum uint64
-	// pouchNamesSnapshot is a snapshot of all pouches which are included in the compression
-	pouchNamesSnapshot map[string]struct{}
+	// segmentNamesSnapshot is a snapshot of all segments which are included in the compression
+	segmentNamesSnapshot map[string]struct{}
 }
 
 // createCompressor creates a new compressor to compress the bucket
 func createCompressor(b *Bucket) (*compressor, error) {
 	c := compressor{
 		bucket:                b,
-		pouchList:             make([]*pouch.Pouch, 0, len(b.pouchList)),
+		segmentList:           make([]segment.Segment, 0, len(b.segmentList)),
 		recordSequenceNumbers: make(map[uint64]RecordPosition),
 		endSeqNum:             0,
 		bucketStartSeqNum:     0,
-		pouchNamesSnapshot:    make(map[string]struct{}),
+		segmentNamesSnapshot:  make(map[string]struct{}),
 	}
-	if err := c.addPouch(1); err != nil {
-		return nil, fmt.Errorf("can't add new pouch to compressor: %w", err)
+	if err := c.addSegment(1); err != nil {
+		return nil, fmt.Errorf("can't add new segment to compressor: %w", err)
 	}
 
 	b.dataMutex.RLock()
-	var latestPouch *pouch.Pouch
-	for i := 0; i < len(b.pouchList)-1; i++ {
-		latestPouch = b.pouchList[i]
-		c.pouchNamesSnapshot[latestPouch.Name()] = struct{}{}
+	var latestSegment segment.Segment
+	for i := 0; i < len(b.segmentList)-1; i++ {
+		latestSegment = b.segmentList[i]
+		c.segmentNamesSnapshot[latestSegment.Name()] = struct{}{}
 	}
 	b.dataMutex.RUnlock()
 
-	if latestPouch == nil {
-		return nil, fmt.Errorf("can't read second latest pouch from bucket")
+	if latestSegment == nil {
+		return nil, fmt.Errorf("can't read second latest segment from bucket")
 	}
 
-	lastRecordOffset := latestPouch.LastOffset()
-	pr := pouch.Record{}
-	if err := latestPouch.ReadByOffset(lastRecordOffset, true, &pr); err != nil {
-		return nil, fmt.Errorf("can't read last record from second latest pouch in bucket: %w", err)
+	lastRecordOffset := latestSegment.LastOffset()
+	pr := segment.Record{}
+	if err := latestSegment.ReadByOffset(lastRecordOffset, true, &pr); err != nil {
+		return nil, fmt.Errorf("can't read last record from second latest segment in bucket: %w", err)
 	}
 	r := Record{}
 	if err := toRecord(pr, &r); err != nil {
@@ -67,67 +67,67 @@ func (c *compressor) endSequenceNumber() uint64 {
 	return c.endSeqNum
 }
 
-// addPouch adds a new pouch to the compressor
-func (c *compressor) addPouch(seqNum uint64) error {
+// addSegment adds a new segment to the compressor
+func (c *compressor) addSegment(seqNum uint64) error {
 
-	pouchName := c.bucket.pouchName(seqNum)
+	segmentName := c.bucket.segmentName(seqNum)
 	for {
-		if _, err := os.Stat(pouchName); !os.IsNotExist(err) {
-			pouchName = pouchName + "c"
+		if _, err := os.Stat(segmentName); !os.IsNotExist(err) {
+			segmentName = segmentName + "c"
 			continue
 		}
 		break
 	}
 
-	pouchItem, err := pouch.Open(pouchName)
+	seg, err := segment.Open(segmentName)
 	if err != nil {
-		return fmt.Errorf("can't create new pouch: %w", err)
+		return fmt.Errorf("can't create new segment: %w", err)
 	}
 
-	c.pouchList = append(c.pouchList, pouchItem)
+	c.segmentList = append(c.segmentList, seg)
 	return nil
 }
 
-// currentWritePouch returns the current pouch to write to
-func (c *compressor) currentWritePouch(currentSeqNum uint64) (*pouch.Pouch, error) {
-	if len(c.pouchList) == 0 {
-		return nil, fmt.Errorf("empty pouch list")
+// currentWriteSegment returns the current segment to write to
+func (c *compressor) currentWriteSegment(currentSeqNum uint64) (segment.Segment, error) {
+	if len(c.segmentList) == 0 {
+		return nil, fmt.Errorf("empty segment list")
 	}
 
 	for {
-		writePouch := c.pouchList[len(c.pouchList)-1]
-		size, err := writePouch.Size()
+		writeSeg := c.segmentList[len(c.segmentList)-1]
+		size, err := writeSeg.Size()
 		if err != nil {
-			return nil, fmt.Errorf("can't read pouch size: %w", err)
+			return nil, fmt.Errorf("can't read segment size: %w", err)
 		}
-		if uint64(size) >= c.bucket.maxPouchSize {
-			if err := c.addPouch(currentSeqNum); err != nil {
-				return nil, fmt.Errorf("can't add new pouch file to compressor: %w", err)
+		if uint64(size) >= c.bucket.maxSegmentSize {
+			if err := c.addSegment(currentSeqNum); err != nil {
+				return nil, fmt.Errorf("can't add new segment file to compressor: %w", err)
 			}
 			continue
 		}
-		return writePouch, nil
+		return writeSeg, nil
 	}
 }
 
-// write writes the record to the compressor pouch files
+// write writes the record to the compressor segment files
 func (c *compressor) write(r *Record) error {
-	writePouch, err := c.currentWritePouch(r.SequenceNumber())
+	writeSeg, err := c.currentWriteSegment(r.SequenceNumber())
 	if err != nil {
-		return fmt.Errorf("can't request write pouch: %w", err)
+		return fmt.Errorf("can't request write segment: %w", err)
 	}
 
-	pr := pouch.Record{}
-	r.toPouchRecord(&pr)
+	pr := segment.Record{}
+	r.toSegmentRecord(&pr)
 
-	offset, err := writePouch.WriteRecord(&pr)
+	offset, err := writeSeg.WriteRecord(&pr)
 	if err != nil {
 		return fmt.Errorf("can't wirte to compressor: %w", err)
 	}
 
 	c.recordSequenceNumbers[r.SequenceNumber()] = RecordPosition{
-		Offset: offset,
-		Pouch:  writePouch,
+		Offset:  offset,
+		Segment: writeSeg,
 	}
 
 	if r.SequenceNumber() < c.bucketStartSeqNum {
@@ -136,28 +136,28 @@ func (c *compressor) write(r *Record) error {
 	return nil
 }
 
-// apply changes the pouchList of the actual bucket. writing to the bucket is blocked during this step
+// apply changes the segmentList of the actual bucket. writing to the bucket is blocked during this step
 func (c *compressor) apply() error {
 	c.bucket.writeMutex.Lock()
 	defer c.bucket.writeMutex.Unlock()
 	c.bucket.dataMutex.Lock()
 	defer c.bucket.dataMutex.Unlock()
 
-	newPouchNameList := make([]string, len(c.bucket.pouchList))
-	for _, p := range c.pouchList {
-		newPouchNameList = append(newPouchNameList, p.Name())
+	newSegmentNameList := make([]string, len(c.bucket.segmentList))
+	for _, p := range c.segmentList {
+		newSegmentNameList = append(newSegmentNameList, p.Name())
 	}
 
-	for _, p := range c.bucket.pouchList {
-		if _, ok := c.pouchNamesSnapshot[p.Name()]; !ok {
-			c.pouchList = append(c.pouchList, p)
-			newPouchNameList = append(newPouchNameList, p.Name())
+	for _, p := range c.bucket.segmentList {
+		if _, ok := c.segmentNamesSnapshot[p.Name()]; !ok {
+			c.segmentList = append(c.segmentList, p)
+			newSegmentNameList = append(newSegmentNameList, p.Name())
 		} else {
-			// ignore error. the unclosed pouch should not stop the compression
+			// ignore error. the unclosed segment should not stop the compression
 			_ = p.Close()
 		}
 	}
-	c.bucket.pouchList = c.pouchList
+	c.bucket.segmentList = c.segmentList
 
 	// delete old record positions from bucket
 	for seqNum := range c.bucket.recordSequenceNumbers {
@@ -175,21 +175,21 @@ func (c *compressor) apply() error {
 
 	// backup bucket store file
 	storeBackupName := c.bucket.store.name + "_snapshot"
-	if err := c.bucket.store.pou.Snapshot(storeBackupName); err != nil {
+	if err := c.bucket.store.segment.Snapshot(storeBackupName); err != nil {
 		return fmt.Errorf("can't create backup / snapshot of bucket store file: %w", err)
 	}
 
-	// update bucket store with new pouch names
-	if err := c.bucket.store.update(newPouchNameList); err != nil {
+	// update bucket store with new segment names
+	if err := c.bucket.store.update(newSegmentNameList); err != nil {
 		// the bucket will be closed to avoid data loss. After opening the bucket again, the old state should be restored
 		_ = c.bucket.Close()
-		return fmt.Errorf("can't update pouch names in bucket store. bucket is closed now to avoid data loss: %w", err)
+		return fmt.Errorf("can't update segment names in bucket store. bucket is closed now to avoid data loss: %w", err)
 	}
 
 	// remove bucket store file backup
 	_ = os.Remove(storeBackupName)
 
-	for name := range c.pouchNamesSnapshot {
+	for name := range c.segmentNamesSnapshot {
 		// ignore removal error. this shouldn't stop the compression status
 		_ = os.Remove(name)
 	}
