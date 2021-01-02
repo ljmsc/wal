@@ -8,7 +8,7 @@ import (
 )
 
 func main() {
-	w, err := wal.Open("./path/to/wal", bucket.DefaultMaxPouchSize, true, nil)
+	w, err := wal.Open("./path/to/wal", bucket.DefaultMaxSegmentSize, true, nil)
 	if err != nil {
 		// handle error
 		panic(err)

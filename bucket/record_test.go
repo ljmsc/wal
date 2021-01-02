@@ -4,7 +4,7 @@ import (
 	"encoding/binary"
 	"testing"
 
-	"github.com/ljmsc/wal/pouch"
+	"github.com/ljmsc/wal/segment"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -28,18 +28,18 @@ func TestParseRecord(t *testing.T) {
 	seqNumBytes := make([]byte, 8)
 	binary.LittleEndian.PutUint64(seqNumBytes, sn)
 
-	metadata := pouch.Metadata(make(map[string][]byte))
+	metadata := segment.Metadata(make(map[string][]byte))
 	metadata[SequenceNumberMetadataKey] = seqNumBytes
 
-	metadataSizeBytes := make([]byte, pouch.MetaMetadataSizeField)
+	metadataSizeBytes := make([]byte, segment.MetaMetadataSizeField)
 	binary.LittleEndian.PutUint64(metadataSizeBytes, metadata.GetSize())
 
 	keySize := len(key)
 	dataSize := len(data)
-	keySizeBytes := make([]byte, pouch.MetaRecordKeySizeField)
+	keySizeBytes := make([]byte, segment.MetaRecordKeySizeField)
 	binary.LittleEndian.PutUint64(keySizeBytes, uint64(keySize))
 
-	recordBytes := make([]byte, 0, pouch.MetaMetadataSizeField+int(metadata.GetSize())+pouch.MetaRecordKeySizeField+keySize+dataSize)
+	recordBytes := make([]byte, 0, segment.MetaMetadataSizeField+int(metadata.GetSize())+segment.MetaRecordKeySizeField+keySize+dataSize)
 
 	recordBytes = append(recordBytes, metadataSizeBytes...)
 	recordBytes = append(recordBytes, metadata.Bytes()...)
@@ -47,8 +47,8 @@ func TestParseRecord(t *testing.T) {
 	recordBytes = append(recordBytes, key...)
 	recordBytes = append(recordBytes, data...)
 
-	sr := pouch.Record{}
-	err := pouch.ParseRecord(recordBytes, &sr)
+	sr := segment.Record{}
+	err := segment.ParseRecord(recordBytes, &sr)
 
 	if !assert.NoError(t, err) {
 		return
@@ -77,15 +77,15 @@ func TestRecordValidate(t *testing.T) {
 	assert.NoError(t, record.Validate())
 }
 
-func TestToPouchRecord(t *testing.T) {
+func TestToSegmentRecord(t *testing.T) {
 	r := CreateRecord([]byte("my_test_key"), []byte("my_test_data"))
 	setSequenceNumber(42, r)
 	r.Metadata["test1"] = []byte("test meta")
 
-	pr := pouch.Record{}
+	pr := segment.Record{}
 	addressPr := &pr
 
-	r.toPouchRecord(&pr)
+	r.toSegmentRecord(&pr)
 
 	assert.Equal(t, addressPr, &pr)
 	assert.EqualValues(t, []byte("my_test_key"), pr.Key)

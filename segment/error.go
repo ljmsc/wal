@@ -1,4 +1,4 @@
-package pouch
+package segment
 
 import (
 	"fmt"
@@ -8,16 +8,16 @@ import (
 var (
 	KeyIsEmptyErr          = fmt.Errorf("record key is empty")
 	RecordNotFoundErr      = fmt.Errorf("junk not found")
-	ClosedErr              = fmt.Errorf("pouch is closed")
+	ClosedErr              = fmt.Errorf("segment is closed")
 	KeyNotFoundErr         = fmt.Errorf("key not found")
 	NotEnoughBytesErr      = fmt.Errorf("not enough bytes")
 	TooManyBytesErr        = fmt.Errorf("too many bytes")
 	OnlyHeaderErr          = fmt.Errorf("record contains only header")
-	NotClosedErr           = fmt.Errorf("pouch is open for read/write")
+	NotClosedErr           = fmt.Errorf("segment is open for read/write")
 	InvalidRecordOffsetErr = fmt.Errorf("can't read record from offset")
 )
 
-// ReadErr error occurs when a record could not be read from the pouch file
+// ReadErr error occurs when a record could not be read from the segment file
 type ReadErr struct {
 	Offset int64
 	Err    error
@@ -30,7 +30,7 @@ func (e ReadErr) Error() string {
 
 func (e ReadErr) Unwrap() error { return e.Err }
 
-// WriteErr error occurs when a record could not be written to the pouch file
+// WriteErr error occurs when a record could not be written to the segment file
 type WriteErr struct {
 	Err error
 }

@@ -1,4 +1,4 @@
-package pouch
+package segment
 
 import (
 	"os"
@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-var testDir = "../tmp/pouch/"
+var testDir = "../tmp/segment/"
 
 func prepare(dir string) {
 	if err := os.MkdirAll(dir, 0700); err != nil {
@@ -23,7 +23,7 @@ func cleanup(dir string) {
 	}
 }
 
-func fillPouch(p *Pouch, amount int, writeSuffix string) []int64 {
+func fillSegment(p Segment, amount int, writeSuffix string) []int64 {
 	offsets := make([]int64, 0, amount)
 	for i := 0; i < amount; i++ {
 		testKey := []byte("test_key_" + strconv.Itoa(i))
@@ -39,7 +39,7 @@ func fillPouch(p *Pouch, amount int, writeSuffix string) []int64 {
 	return offsets
 }
 
-func createTestSegment(name string, dir string) *Pouch {
+func createTestSegment(name string, dir string) Segment {
 	prepare(testDir)
 	defer cleanup(testDir)
 	seg, err := Open(dir + name)
@@ -52,10 +52,10 @@ func createTestSegment(name string, dir string) *Pouch {
 	return seg
 }
 
-func TestPouchOpenReadWrite(t *testing.T) {
+func TestOpenReadWrite(t *testing.T) {
 	prepare(testDir)
 	defer cleanup(testDir)
-	pou, err := Open(testDir + "test_open_read_write")
+	seg, err := Open(testDir + "test_open_read_write")
 	require.NoError(t, err)
 
 	for i := 0; i < 15; i++ {
@@ -63,7 +63,7 @@ func TestPouchOpenReadWrite(t *testing.T) {
 		testData := []byte("test_data_" + strconv.Itoa(i) + "WriteRecord")
 		testRecord := CreateRecord(testKey, testData)
 
-		_, err := pou.WriteRecord(testRecord)
+		_, err := seg.WriteRecord(testRecord)
 		require.NoError(t, err)
 	}
 
@@ -71,29 +71,29 @@ func TestPouchOpenReadWrite(t *testing.T) {
 		testKey := []byte("test_key_" + strconv.Itoa(i))
 		testData := []byte("test_data_" + strconv.Itoa(i) + "write")
 
-		_, err := pou.Write(testKey, testData)
+		_, err := seg.Write(testKey, testData)
 		require.NoError(t, err)
 	}
 
-	_, err = pou.Size()
+	_, err = seg.Size()
 	assert.NoError(t, err)
 
-	closeErr := pou.Close()
+	closeErr := seg.Close()
 	require.NoError(t, closeErr)
 
-	pou2, err := Open(testDir + "test_open_read_write")
+	seg2, err := Open(testDir + "test_open_read_write")
 	require.NoError(t, err)
 
 	for i := 0; i < 20; i++ {
 		testKey := []byte("test_key_" + strconv.Itoa(i))
 
 		testReadRecord := Record{}
-		err := pou2.ReadByKey(testKey, true, &testReadRecord)
+		err := seg2.ReadByKey(testKey, true, &testReadRecord)
 		require.NoError(t, err)
 		assert.EqualValues(t, testKey, testReadRecord.Key)
 
 		testReadRecord2 := Record{}
-		err2 := pou2.ReadByKey(testKey, false, &testReadRecord2)
+		err2 := seg2.ReadByKey(testKey, false, &testReadRecord2)
 		if !assert.NoError(t, err2) {
 			return
 		}
@@ -104,12 +104,12 @@ func TestPouchOpenReadWrite(t *testing.T) {
 		testKey := []byte("test_key_" + strconv.Itoa(i))
 		testData := []byte("test_data_" + strconv.Itoa(i) + "write_new")
 
-		_, err := pou2.Write(testKey, testData)
+		_, err := seg2.Write(testKey, testData)
 		require.NoError(t, err)
 	}
 
 	/*
-		stream := pou2.StreamRecords(true)
+		stream := seg2.StreamRecords(true)
 		for {
 			item, ok := <-stream
 			if !ok {
@@ -126,89 +126,89 @@ func TestPouchOpenReadWrite(t *testing.T) {
 
 
 	*/
-	closeErr = pou2.Close()
+	closeErr = seg2.Close()
 	require.NoError(t, closeErr)
 }
 
-func TestPouchSnapshot(t *testing.T) {
+func TestSnapshot(t *testing.T) {
 	prepare(testDir)
 	defer cleanup(testDir)
 	name := testDir + "test_snapshot"
 	snapName := name + "_copy"
-	pou, err := Open(name)
+	seg, err := Open(name)
 	require.NoError(t, err)
-	defer pou.Close()
+	defer seg.Close()
 
-	fillPouch(pou, 15, "")
+	fillSegment(seg, 15, "")
 
-	size, err := pou.Size()
+	size, err := seg.Size()
 	assert.NoError(t, err)
 
-	err = pou.Snapshot(snapName)
+	err = seg.Snapshot(snapName)
 	require.NoError(t, err)
 
-	pou2, err := Open(snapName)
+	seg2, err := Open(snapName)
 	require.NoError(t, err)
-	defer pou2.Close()
+	defer seg2.Close()
 
-	size2, err := pou2.Size()
+	size2, err := seg2.Size()
 	assert.NoError(t, err)
 
 	assert.EqualValues(t, size, size2)
 }
 
-func TestPouchRemove(t *testing.T) {
+func TestRemove(t *testing.T) {
 	prepare(testDir)
 	defer cleanup(testDir)
 	name := testDir + "test_remove"
-	pou, err := Open(name)
+	seg, err := Open(name)
 	require.NoError(t, err)
 
-	fillPouch(pou, 15, "")
+	fillSegment(seg, 15, "")
 
-	err = pou.Close()
+	err = seg.Close()
 	assert.NoError(t, err)
 
-	err = pou.Remove()
+	err = seg.Remove()
 	require.NoError(t, err)
 }
 
-func TestPouchTruncate(t *testing.T) {
+func TestTruncate(t *testing.T) {
 	prepare(testDir)
 	defer cleanup(testDir)
 	// defer
 
 	name := testDir + "test_truncate"
-	pou, err := Open(name)
+	seg, err := Open(name)
 	require.NoError(t, err)
-	defer pou.Close()
+	defer seg.Close()
 
-	offsets := fillPouch(pou, 15, "")
+	offsets := fillSegment(seg, 15, "")
 	assert.EqualValues(t, 15, len(offsets))
 
-	latestOffsets := pou.LastOffsets()
+	latestOffsets := seg.LastOffsets()
 	assert.EqualValues(t, 15, len(latestOffsets))
 	offset9 := offsets[9]
 
-	latestOffset := pou.LastOffset()
+	latestOffset := seg.LastOffset()
 	assert.EqualValues(t, 750, latestOffset)
 
 	r := Record{}
-	err = pou.ReadByOffset(offset9, true, &r)
+	err = seg.ReadByOffset(offset9, true, &r)
 	assert.NoError(t, err)
 
-	err = pou.Truncate(offset9)
-	require.NoError(t, err, "can' truncate pouch")
+	err = seg.Truncate(offset9)
+	require.NoError(t, err, "can' truncate segment")
 
 	r2 := Record{}
-	err = pou.ReadByOffset(offset9, true, &r2)
+	err = seg.ReadByOffset(offset9, true, &r2)
 	assert.EqualError(t, err, InvalidRecordOffsetErr.Error())
 
-	offset8 := pou.LastOffset()
+	offset8 := seg.LastOffset()
 	r3 := Record{}
-	err = pou.ReadByOffset(offset8, true, &r3)
+	err = seg.ReadByOffset(offset8, true, &r3)
 	assert.NoError(t, err)
 
-	latestOffsets = pou.LastOffsets()
+	latestOffsets = seg.LastOffsets()
 	assert.EqualValues(t, 9, len(latestOffsets))
 }

@@ -1,8 +1,6 @@
 package bucket
 
-import (
-	"github.com/ljmsc/wal/pouch"
-)
+import "github.com/ljmsc/wal/segment"
 
 const (
 	SequenceNumberMetadataKey = "sq"
@@ -10,18 +8,18 @@ const (
 
 // Record .
 type Record struct {
-	pouch.Record
+	segment.Record
 }
 
-func CreateRecord(key pouch.Key, data pouch.Data, metaRecords ...pouch.MetaRecord) *Record {
-	return &Record{Record: *pouch.CreateRecord(key, data, metaRecords...)}
+func CreateRecord(key segment.Key, data segment.Data, metaRecords ...segment.MetaRecord) *Record {
+	return &Record{Record: *segment.CreateRecord(key, data, metaRecords...)}
 }
 
 func setSequenceNumber(seqNum uint64, r *Record) {
-	pouch.MetaPutUint64(SequenceNumberMetadataKey, seqNum, r.Metadata)
+	segment.MetaPutUint64(SequenceNumberMetadataKey, seqNum, r.Metadata)
 }
 
-func toRecord(pr pouch.Record, r *Record) error {
+func toRecord(pr segment.Record, r *Record) error {
 	if _, ok := pr.Metadata[SequenceNumberMetadataKey]; !ok {
 		return MissingSequenceNumberFieldErr
 	}
@@ -30,7 +28,7 @@ func toRecord(pr pouch.Record, r *Record) error {
 	return nil
 }
 
-func (r Record) toPouchRecord(pr *pouch.Record) {
+func (r Record) toSegmentRecord(pr *segment.Record) {
 	*pr = r.Record
 }
 
@@ -56,5 +54,5 @@ type Envelope struct {
 type RecordPosition struct {
 	KeyHash uint64
 	Offset  int64
-	Pouch   *pouch.Pouch
+	Segment segment.Segment
 }

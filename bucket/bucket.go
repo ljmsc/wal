@@ -8,55 +8,75 @@ import (
 	"strconv"
 	"sync"
 
-	"github.com/ljmsc/wal/pouch"
+	"github.com/ljmsc/wal/segment"
 )
 
 const (
-	DefaultMaxPouchSize = 1e9 // 1GB
+	DefaultMaxSegmentSize = 1e9 // 1GB
 )
 
-// Bucket .
-type Bucket struct {
-	// name is the name if the pouch bucket. This is a filepath
+type Bucket interface {
+	Name() string
+	Close() error
+	IsClosed() bool
+	ReadByHash(keyHash uint64, headOnly bool, r *Record) error
+	ReadByKey(key segment.Key, headOnly bool, r *Record) error
+	ReadBySequenceNumber(seqNum uint64, headOnly bool, r *Record) error
+	Write(key segment.Key, data segment.Data) error
+	WriteRecord(r *Record) error
+	Dump(_seqNum uint64) error
+	LatestSequenceNumber() uint64
+	LatestSequenceNumbers() []uint64
+	StreamRecords(startSeqNum uint64, endSeqNum uint64, headOnly bool) <-chan Envelope
+	StreamLatestRecords(headOnly bool) <-chan Envelope
+	Compress() error
+	CompressWithFilter(filter func(item *Record) bool) error
+	Size() (int64, error)
+	Remove() error
+}
+
+// bucket .
+type bucket struct {
+	// name is the name if the segment bucket. This is a filepath
 	name string
-	// store is a list of all pouches in the pouch bucket
+	// store is a list of all segments in the segment bucket
 	store *store
-	// pouchList is the list of pouches in the bucket
-	pouchList []*pouch.Pouch
+	// segmentList is the list of segments in the bucket
+	segmentList []segment.Segment
 	// dataMutex is a mutex to protect the data in the bucket
 	dataMutex sync.RWMutex
-	// latestSequenceNumber is the last sequence number written to a pouch file in the bucket
+	// latestSequenceNumber is the last sequence number written to a segment file in the bucket
 	latestSequenceNumber uint64
 	// firstSequenceNumber is the first sequence number in the bucket. this changes during compression
 	firstSequenceNumber uint64
-	// recordSequenceNumbers stores the pouch and offset for a sequence number
+	// recordSequenceNumbers stores the segment and offset for a sequence number
 	recordSequenceNumbers map[uint64]RecordPosition
 	// recordKeys - the map key is the hash value of the record Key and the value is the bucket sequence number
 	recordKeys map[uint64][]uint64
-	// writeMutex is a mutex to protect the write operations to the pouches
+	// writeMutex is a mutex to protect the write operations to the segments
 	writeMutex sync.Mutex
 	// closed
 	closed bool
-	// maxPouchSize defines the max size of the pouch files in the bucket in bytes
-	maxPouchSize uint64
+	// maxSegmentSize defines the max size of the segment files in the bucket in bytes
+	maxSegmentSize uint64
 }
 
 // OpenWithHandler .
-func OpenWithHandler(name string, headOnly bool, handler func(r Record) error) (*Bucket, error) {
-	return Open(name, DefaultMaxPouchSize, headOnly, handler)
+func OpenWithHandler(name string, headOnly bool, handler func(r Record) error) (Bucket, error) {
+	return Open(name, DefaultMaxSegmentSize, headOnly, handler)
 }
 
 // OpenWithSize .
-func OpenWithSize(name string, maxPouchSize uint64) (*Bucket, error) {
-	return Open(name, maxPouchSize, true, nil)
+func OpenWithSize(name string, maxSegmentSize uint64) (Bucket, error) {
+	return Open(name, maxSegmentSize, true, nil)
 }
 
 // OpenWithSize .
-func Open(name string, maxPouchSize uint64, headOnly bool, handler func(r Record) error) (*Bucket, error) {
-	if maxPouchSize == 0 {
-		maxPouchSize = DefaultMaxPouchSize
+func Open(name string, maxSegmentSize uint64, headOnly bool, handler func(r Record) error) (Bucket, error) {
+	if maxSegmentSize == 0 {
+		maxSegmentSize = DefaultMaxSegmentSize
 	}
-	c := Bucket{
+	c := bucket{
 		name:                  name,
 		latestSequenceNumber:  0,
 		firstSequenceNumber:   0,
@@ -65,7 +85,7 @@ func Open(name string, maxPouchSize uint64, headOnly bool, handler func(r Record
 		recordKeys:            make(map[uint64][]uint64),
 		writeMutex:            sync.Mutex{},
 		closed:                false,
-		maxPouchSize:          maxPouchSize,
+		maxSegmentSize:        maxSegmentSize,
 	}
 
 	var err error
@@ -74,12 +94,12 @@ func Open(name string, maxPouchSize uint64, headOnly bool, handler func(r Record
 		return nil, fmt.Errorf("can't open bucket store: %w", err)
 	}
 
-	pouchNames := c.store.get()
-	c.pouchList = make([]*pouch.Pouch, 0, len(pouchNames)+5)
+	segmentNames := c.store.get()
+	c.segmentList = make([]segment.Segment, 0, len(segmentNames)+5)
 
-	for _, pouchName := range pouchNames {
-		sequenceNumbers := make([]uint64, 0, len(pouchNames)*10)
-		pou, err := pouch.OpenWithHandler(pouchName, headOnly, func(envelope pouch.Envelope) error {
+	for _, segName := range segmentNames {
+		sequenceNumbers := make([]uint64, 0, len(segmentNames)*10)
+		seg, err := segment.OpenWithHandler(segName, headOnly, func(envelope segment.Envelope) error {
 			r := Record{}
 			if err := toRecord(*envelope.Record, &r); err != nil {
 				return ConvertErr{Err: err}
@@ -118,79 +138,79 @@ func Open(name string, maxPouchSize uint64, headOnly bool, handler func(r Record
 			return nil
 		})
 		if err != nil {
-			return nil, fmt.Errorf("can't open pouch file %s : %w", pouchName, err)
+			return nil, fmt.Errorf("can't open segment file %s : %w", segName, err)
 		}
 		for _, sequenceNumber := range sequenceNumbers {
 			if recordPosition, ok := c.recordSequenceNumbers[sequenceNumber]; ok {
 				c.recordSequenceNumbers[sequenceNumber] = RecordPosition{
 					KeyHash: recordPosition.KeyHash,
 					Offset:  recordPosition.Offset,
-					Pouch:   pou,
+					Segment: seg,
 				}
 			}
 		}
 
-		c.pouchList = append(c.pouchList, pou)
+		c.segmentList = append(c.segmentList, seg)
 	}
 	return &c, nil
 }
 
-// pouchName returns a pouch name for the bucket
-func (b *Bucket) pouchName(startSeqNum uint64) string {
+// segmentName returns a segment name for the bucket
+func (b *bucket) segmentName(startSeqNum uint64) string {
 	return b.name + "_" + strconv.FormatUint(startSeqNum, 10)
 }
 
-// pouch returns a pouch file. the offset determines which pouch file to return
+// segment returns a segment file. the offset determines which segment file to return
 // 0 = latest
 // 1 = second latest
 // and so on
-func (b *Bucket) pouch(listPosition uint64) (*pouch.Pouch, error) {
-	listSize := uint64(len(b.pouchList))
+func (b *bucket) segment(listPosition uint64) (segment.Segment, error) {
+	listSize := uint64(len(b.segmentList))
 	if listSize == 0 {
-		if err := b.addPouch(); err != nil {
-			return nil, fmt.Errorf("can't add new pouch to bucket: %w", err)
+		if err := b.addSegment(); err != nil {
+			return nil, fmt.Errorf("can't add new segment to bucket: %w", err)
 		}
-		listSize = uint64(len(b.pouchList))
+		listSize = uint64(len(b.segmentList))
 	}
 	b.dataMutex.RLock()
 	defer b.dataMutex.RUnlock()
 
 	pos := int64(listSize - (1 + listPosition))
 	if pos < 0 {
-		return nil, PouchNotFoundErr
+		return nil, SegmentNotFoundErr
 	}
 
-	return b.pouchList[pos], nil
+	return b.segmentList[pos], nil
 }
 
-func (b *Bucket) addPouch() error {
+func (b *bucket) addSegment() error {
 	b.dataMutex.Lock()
 	defer b.dataMutex.Unlock()
 
-	pouchName := b.pouchName(b.latestSequenceNumber + 1)
-	pou, err := pouch.Open(pouchName)
+	segName := b.segmentName(b.latestSequenceNumber + 1)
+	seg, err := segment.Open(segName)
 	if err != nil {
-		return fmt.Errorf("can't open new pouch file: %w", err)
+		return fmt.Errorf("can't open new segment file: %w", err)
 	}
-	b.pouchList = append(b.pouchList, pou)
-	pouchNames := b.store.get()
-	pouchNames = append(pouchNames, pouchName)
-	if err := b.store.update(pouchNames); err != nil {
-		_ = pou.Close()
-		_ = os.Remove(pouchName)
+	b.segmentList = append(b.segmentList, seg)
+	segmentNames := b.store.get()
+	segmentNames = append(segmentNames, segName)
+	if err := b.store.update(segmentNames); err != nil {
+		_ = seg.Close()
+		_ = os.Remove(segName)
 		return fmt.Errorf("can't update bucket store: %w", err)
 	}
 	return nil
 }
 
-func (b *Bucket) readFromPouch(p *pouch.Pouch, offset int64, headOnly bool, r *Record) error {
+func (b *bucket) readFromSegment(p segment.Segment, offset int64, headOnly bool, r *Record) error {
 	b.dataMutex.RLock()
 	defer b.dataMutex.RUnlock()
 	if b.closed {
 		return ClosedErr
 	}
 
-	sr := pouch.Record{}
+	sr := segment.Record{}
 	if err := p.ReadByOffset(offset, headOnly, &sr); err != nil {
 		return err
 	}
@@ -201,30 +221,30 @@ func (b *Bucket) readFromPouch(p *pouch.Pouch, offset int64, headOnly bool, r *R
 	return nil
 }
 
-func (b *Bucket) read(hash uint64, headOnly bool, r *Record) error {
+func (b *bucket) read(hash uint64, headOnly bool, r *Record) error {
 	b.dataMutex.RLock()
 	defer b.dataMutex.RUnlock()
 	if b.closed {
 		return ClosedErr
 	}
 
-	for i := 0; i < len(b.pouchList); i++ {
-		pou, err := b.pouch(uint64(i))
+	for i := 0; i < len(b.segmentList); i++ {
+		seg, err := b.segment(uint64(i))
 		if err != nil {
-			if errors.Is(err, PouchNotFoundErr) {
+			if errors.Is(err, SegmentNotFoundErr) {
 				break
 			}
 			return err
 		}
-		sr := pouch.Record{}
-		if err := pou.ReadByHash(hash, headOnly, &sr); err != nil {
-			if errors.Is(err, pouch.RecordNotFoundErr) {
+		sr := segment.Record{}
+		if err := seg.ReadByHash(hash, headOnly, &sr); err != nil {
+			if errors.Is(err, segment.RecordNotFoundErr) {
 				continue
 			}
 
 			return ReadErr{
-				PouchName: pou.Name(),
-				Err:       err,
+				SegmentName: seg.Name(),
+				Err:         err,
 			}
 		}
 
@@ -237,27 +257,27 @@ func (b *Bucket) read(hash uint64, headOnly bool, r *Record) error {
 	return RecordNotFoundErr
 }
 
-func (b *Bucket) write(r *Record) error {
+func (b *bucket) write(r *Record) error {
 	b.writeMutex.Lock()
 	defer b.writeMutex.Unlock()
 	if b.closed {
 		return ClosedErr
 	}
 
-	var latestPouch *pouch.Pouch
+	var latestSegment segment.Segment
 	for {
 		var err error
-		latestPouch, err = b.pouch(0)
+		latestSegment, err = b.segment(0)
 		if err != nil {
 			//
 			return err
 		}
-		segSize, err := latestPouch.Size()
+		segSize, err := latestSegment.Size()
 		if err != nil {
 			return err
 		}
-		if uint64(segSize) > b.maxPouchSize {
-			if err := b.addPouch(); err != nil {
+		if uint64(segSize) > b.maxSegmentSize {
+			if err := b.addSegment(); err != nil {
 				return err
 			}
 			continue
@@ -273,14 +293,14 @@ func (b *Bucket) write(r *Record) error {
 		return RecordNotValidErr{Err: err}
 	}
 
-	pr := pouch.Record{}
-	r.toPouchRecord(&pr)
+	pr := segment.Record{}
+	r.toSegmentRecord(&pr)
 
-	recordOffset, err := latestPouch.WriteRecord(&pr)
+	recordOffset, err := latestSegment.WriteRecord(&pr)
 	if err != nil {
 		return WriteErr{
-			PouchName: latestPouch.Name(),
-			Err:       err,
+			SegmentName: latestSegment.Name(),
+			Err:         err,
 		}
 	}
 
@@ -291,7 +311,7 @@ func (b *Bucket) write(r *Record) error {
 	b.recordSequenceNumbers[r.SequenceNumber()] = RecordPosition{
 		KeyHash: r.Key.Hash(),
 		Offset:  recordOffset,
-		Pouch:   latestPouch,
+		Segment: latestSegment,
 	}
 	b.latestSequenceNumber++
 
@@ -301,15 +321,15 @@ func (b *Bucket) write(r *Record) error {
 // compress .
 // for filter = true remove item
 // for filter = false keep item
-func (b *Bucket) compress(filter func(item *Record) bool) error {
+func (b *bucket) compress(filter func(item *Record) bool) error {
 	b.dataMutex.RLock()
 	defer b.dataMutex.RUnlock()
 	if b.IsClosed() {
 		return ClosedErr
 	}
 
-	if len(b.pouchList) < 3 {
-		return NotEnoughPouchesForCompressionErr
+	if len(b.segmentList) < 3 {
+		return NotEnoughSegmentsForCompressionErr
 	}
 
 	compressor, err := createCompressor(b)
@@ -341,20 +361,20 @@ func (b *Bucket) compress(filter func(item *Record) bool) error {
 	return nil
 }
 
-// Name returns the name of the pouch bucket
-func (b *Bucket) Name() string {
+// Name returns the name of the segment bucket
+func (b *bucket) Name() string {
 	return b.name
 }
 
 // Close closes the bucket for read and writes
-func (b *Bucket) Close() error {
+func (b *bucket) Close() error {
 	b.dataMutex.Lock()
 	defer b.dataMutex.Unlock()
 	b.writeMutex.Lock()
 	defer b.writeMutex.Unlock()
 	b.closed = true
-	closeErrors := make([]error, 0, len(b.pouchList))
-	for _, seg := range b.pouchList {
+	closeErrors := make([]error, 0, len(b.segmentList))
+	for _, seg := range b.segmentList {
 		if err := seg.Close(); err != nil {
 			closeErrors = append(closeErrors, err)
 		}
@@ -368,33 +388,33 @@ func (b *Bucket) Close() error {
 }
 
 // IsClosed returns true if the bucket is already closed
-func (b *Bucket) IsClosed() bool {
+func (b *bucket) IsClosed() bool {
 	return b.closed
 }
 
 // ReadByKey reads the latest record for a given key
-func (b *Bucket) ReadByHash(keyHash uint64, headOnly bool, r *Record) error {
+func (b *bucket) ReadByHash(keyHash uint64, headOnly bool, r *Record) error {
 	return b.read(keyHash, headOnly, r)
 }
 
 // ReadByKey reads the latest record for a given key
-func (b *Bucket) ReadByKey(key pouch.Key, headOnly bool, r *Record) error {
+func (b *bucket) ReadByKey(key segment.Key, headOnly bool, r *Record) error {
 	return b.read(key.Hash(), headOnly, r)
 }
 
 // ReadBySequenceNumber reads a record by a given sequence number
-func (b *Bucket) ReadBySequenceNumber(seqNum uint64, headOnly bool, r *Record) error {
+func (b *bucket) ReadBySequenceNumber(seqNum uint64, headOnly bool, r *Record) error {
 	b.dataMutex.RLock()
 	defer b.dataMutex.RUnlock()
 	if _, ok := b.recordSequenceNumbers[seqNum]; !ok {
 		return RecordNotFoundErr
 	}
 	pos := b.recordSequenceNumbers[seqNum]
-	if err := b.readFromPouch(pos.Pouch, pos.Offset, headOnly, r); err != nil {
-		if errors.Is(err, pouch.ReadErr{}) {
+	if err := b.readFromSegment(pos.Segment, pos.Offset, headOnly, r); err != nil {
+		if errors.Is(err, segment.ReadErr{}) {
 			return ReadErr{
 				SequenceNumber: seqNum,
-				PouchName:      pos.Pouch.Name(),
+				SegmentName:    pos.Segment.Name(),
 				Err:            err,
 			}
 		}
@@ -404,20 +424,20 @@ func (b *Bucket) ReadBySequenceNumber(seqNum uint64, headOnly bool, r *Record) e
 
 }
 
-// Write writes key and data as a record to the pouch bucket
-func (b *Bucket) Write(key pouch.Key, data pouch.Data) error {
+// Write writes key and data as a record to the segment bucket
+func (b *bucket) Write(key segment.Key, data segment.Data) error {
 	r := CreateRecord(key, data)
 	return b.WriteRecord(r)
 }
 
-// WriteRecord writes the given record to the pouch bucket
-func (b *Bucket) WriteRecord(r *Record) error {
+// WriteRecord writes the given record to the segment bucket
+func (b *bucket) WriteRecord(r *Record) error {
 	return b.write(r)
 }
 
 // Dump - removes all entries whose sequence number is greater or equal to seqNum. the removal is permanently.
 // If want to delete an entry use Write() with empty data and compress the bucket.
-func (b *Bucket) Dump(_seqNum uint64) error {
+func (b *bucket) Dump(_seqNum uint64) error {
 	b.writeMutex.Lock()
 	defer b.writeMutex.Unlock()
 	if b.closed {
@@ -425,7 +445,7 @@ func (b *Bucket) Dump(_seqNum uint64) error {
 	}
 	b.dataMutex.Lock()
 	defer b.dataMutex.Unlock()
-	truncPouchOffsets := make(map[*pouch.Pouch]int64)
+	truncSegmentOffsets := make(map[segment.Segment]int64)
 	stripKeys := make([]uint64, 0, 10)
 	for i := _seqNum; i <= b.latestSequenceNumber; i++ {
 		if _, ok := b.recordSequenceNumbers[i]; !ok {
@@ -434,17 +454,17 @@ func (b *Bucket) Dump(_seqNum uint64) error {
 		recordPos := b.recordSequenceNumbers[i]
 		stripKeys = append(stripKeys, recordPos.KeyHash)
 		delete(b.recordSequenceNumbers, i)
-		if offset, ok := truncPouchOffsets[recordPos.Pouch]; ok {
+		if offset, ok := truncSegmentOffsets[recordPos.Segment]; ok {
 			if offset < recordPos.Offset {
 				continue
 			}
 		}
-		truncPouchOffsets[recordPos.Pouch] = recordPos.Offset
+		truncSegmentOffsets[recordPos.Segment] = recordPos.Offset
 	}
 
-	for pou, offset := range truncPouchOffsets {
-		if err := pou.Truncate(offset); err != nil {
-			return fmt.Errorf("can't truncate pouch: %w", err)
+	for seg, offset := range truncSegmentOffsets {
+		if err := seg.Truncate(offset); err != nil {
+			return fmt.Errorf("can't truncate segment: %w", err)
 		}
 	}
 
@@ -470,14 +490,14 @@ func (b *Bucket) Dump(_seqNum uint64) error {
 }
 
 // LatestSequenceNumbers returns the latest sequence numbers for all written keys
-func (b *Bucket) LatestSequenceNumber() uint64 {
+func (b *bucket) LatestSequenceNumber() uint64 {
 	b.dataMutex.RLock()
 	defer b.dataMutex.RUnlock()
 	return b.latestSequenceNumber
 }
 
 // LatestSequenceNumbers returns the latest sequence numbers for all written keys
-func (b *Bucket) LatestSequenceNumbers() []uint64 {
+func (b *bucket) LatestSequenceNumbers() []uint64 {
 	b.dataMutex.RLock()
 	defer b.dataMutex.RUnlock()
 	sequenceNumbers := make([]uint64, 0, len(b.recordKeys))
@@ -496,7 +516,7 @@ func (b *Bucket) LatestSequenceNumbers() []uint64 {
 // StreamRecords streams records from the bucket into the returning channel. startSeqNum defines the beginning.
 // startSeqNum = 1 for all records
 // endSeqNum = 0 for all records
-func (b *Bucket) StreamRecords(startSeqNum uint64, endSeqNum uint64, headOnly bool) <-chan Envelope {
+func (b *bucket) StreamRecords(startSeqNum uint64, endSeqNum uint64, headOnly bool) <-chan Envelope {
 	stream := make(chan Envelope)
 	go func() {
 		b.dataMutex.RLock()
@@ -513,9 +533,9 @@ func (b *Bucket) StreamRecords(startSeqNum uint64, endSeqNum uint64, headOnly bo
 				continue
 			}
 			pos := b.recordSequenceNumbers[i]
-			sr := pouch.Record{}
+			sr := segment.Record{}
 
-			if err := pos.Pouch.ReadByOffset(pos.Offset, headOnly, &sr); err != nil {
+			if err := pos.Segment.ReadByOffset(pos.Offset, headOnly, &sr); err != nil {
 				stream <- Envelope{Err: err}
 				continue
 			}
@@ -535,7 +555,7 @@ func (b *Bucket) StreamRecords(startSeqNum uint64, endSeqNum uint64, headOnly bo
 }
 
 // StreamLatestRecords returns a channel which will receive the latest records in the bucket. each key at least ones.
-func (b *Bucket) StreamLatestRecords(headOnly bool) <-chan Envelope {
+func (b *bucket) StreamLatestRecords(headOnly bool) <-chan Envelope {
 	stream := make(chan Envelope)
 	go func() {
 		sequenceNumbers := b.LatestSequenceNumbers()
@@ -554,7 +574,7 @@ func (b *Bucket) StreamLatestRecords(headOnly bool) <-chan Envelope {
 }
 
 // Compress compresses the bucket. at least one record for each key remains
-func (b *Bucket) Compress() error {
+func (b *bucket) Compress() error {
 	latestSeqNumbers := b.LatestSequenceNumbers()
 	latestSeqNumbersMap := make(map[uint64]struct{})
 	for _, number := range latestSeqNumbers {
@@ -571,23 +591,23 @@ func (b *Bucket) Compress() error {
 // CompressWithFilter compresses the bucket based on a given filter
 // for filter = true remove item
 // for filter = false keep item
-func (b *Bucket) CompressWithFilter(filter func(item *Record) bool) error {
+func (b *bucket) CompressWithFilter(filter func(item *Record) bool) error {
 	return b.compress(filter)
 }
 
 // Size returns the size of the bucket in bytes
-func (b *Bucket) Size() (int64, error) {
+func (b *bucket) Size() (int64, error) {
 	b.dataMutex.RLock()
 	defer b.dataMutex.RUnlock()
 	bSize := int64(0)
-	for _, p := range b.pouchList {
+	for _, p := range b.segmentList {
 		size, err := p.Size()
 		if err != nil {
-			return 0, fmt.Errorf("can't get size from pouch in bucket pouchList: %w", err)
+			return 0, fmt.Errorf("can't get size from segment in bucket segmentList: %w", err)
 		}
 		bSize += size
 	}
-	size, err := b.store.pou.Size()
+	size, err := b.store.segment.Size()
 	if err != nil {
 		return 0, fmt.Errorf("can't get size from bucket store file: %w", err)
 	}
@@ -596,19 +616,19 @@ func (b *Bucket) Size() (int64, error) {
 }
 
 // Remove removes the bucket from disk
-func (b *Bucket) Remove() error {
+func (b *bucket) Remove() error {
 	b.dataMutex.RLock()
 	defer b.dataMutex.RUnlock()
 	if !b.closed {
 		return NotClosedErr
 	}
 
-	for _, p := range b.pouchList {
+	for _, p := range b.segmentList {
 		if err := p.Remove(); err != nil {
-			return fmt.Errorf("can't remove pouch from bucket: %w", err)
+			return fmt.Errorf("can't remove segment from bucket: %w", err)
 		}
 	}
-	if err := b.store.pou.Remove(); err != nil {
+	if err := b.store.segment.Remove(); err != nil {
 		return fmt.Errorf("can't remove bucket store: %w", err)
 	}
 	return nil

@@ -1,4 +1,4 @@
-package pouch
+package segment
 
 import (
 	"encoding/binary"
@@ -15,32 +15,53 @@ const (
 	MetaRecordHeaderSizeField = 8
 )
 
-// PouchName is the representation of the pouch file
-type Pouch struct {
-	// name is the name if the pouch file
+type Segment interface {
+	StreamRecords(headOnly bool) <-chan Envelope
+	StreamLatestRecords(headOnly bool) <-chan Envelope
+	Name() string
+	Close() error
+	ReadByOffset(offset int64, headOnly bool, r *Record) error
+	ReadByHash(keyHash uint64, headOnly bool, r *Record) error
+	ReadByKey(key Key, headOnly bool, r *Record) error
+	Write(key Key, data Data) (int64, error)
+	WriteRecord(record *Record) (int64, error)
+	Truncate(_dumpOffset int64) error
+	Size() (int64, error)
+	LastOffset() int64
+	LastOffsets() []int64
+	LastOffsetForKey(key Key) (int64, error)
+	IsClosed() bool
+	Count() uint64
+	Snapshot(name string) error
+	Remove() error
+}
+
+// segment is the representation of the segment file
+type segment struct {
+	// name is the name if the segment file
 	name string
-	// recordKeyOffsets - the map key is the hash value of the record Key and the value is the pouch file offset
+	// recordKeyOffsets - the map key is the hash value of the record Key and the value is the segment file offset
 	recordKeyOffsets map[uint64][]int64
 	// recordOffsets - the offsets of the written records
 	recordOffsets []int64
 	// dataMutex is a mutex to protect the cached data in recordKeyOffsets and lastWrittenOffset
 	dataMutex sync.RWMutex
-	// file is the pouch file
+	// file is the segment file
 	file *os.File
-	// fileMutex is a mutex to protect the pouch file
+	// fileMutex is a mutex to protect the segment file
 	fileMutex sync.RWMutex
 	// closed
 	closed bool
 }
 
-// Open opens a pouch file with the given name. If the pouch already exists the pouch is read.
-func Open(name string) (*Pouch, error) {
+// Open opens a segment file with the given name. If the segment already exists the segment is read.
+func Open(name string) (Segment, error) {
 	return OpenWithHandler(name, true, nil)
 }
 
-// Open opens a pouch file with the given name. If the pouch already exists the pouch is read.
-func OpenWithHandler(name string, headOnly bool, handler func(r Envelope) error) (*Pouch, error) {
-	s := Pouch{
+// OpenWithHandler opens a segment file with the given name. If the segment already exists the segment is read.
+func OpenWithHandler(name string, headOnly bool, handler func(r Envelope) error) (Segment, error) {
+	s := segment{
 		name:             name,
 		recordKeyOffsets: make(map[uint64][]int64),
 		recordOffsets:    make([]int64, 0, 10),
@@ -51,7 +72,7 @@ func OpenWithHandler(name string, headOnly bool, handler func(r Envelope) error)
 	var err error
 	s.file, err = os.OpenFile(name, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0600)
 	if err != nil {
-		return nil, fmt.Errorf("can't open pouch file: %w", err)
+		return nil, fmt.Errorf("can't open segment file: %w", err)
 	}
 
 	recordStream := s.StreamRecords(headOnly)
@@ -80,7 +101,7 @@ func OpenWithHandler(name string, headOnly bool, handler func(r Envelope) error)
 
 // readRecordHeader .
 // [8 Record Size][8 RecordHeaderSize][RecordHeader]
-func (p *Pouch) readRecordHeader(offset int64, r *Record) (uint64, error) {
+func (p *segment) readRecordHeader(offset int64, r *Record) (uint64, error) {
 	p.fileMutex.RLock()
 	defer p.fileMutex.RUnlock()
 	if p.closed {
@@ -92,7 +113,7 @@ func (p *Pouch) readRecordHeader(offset int64, r *Record) (uint64, error) {
 		if err == io.EOF {
 			return 0, err
 		}
-		return 0, fmt.Errorf("can't read record size from pouch file: %w", err)
+		return 0, fmt.Errorf("can't read record size from segment file: %w", err)
 	}
 	recordSize := binary.LittleEndian.Uint64(recordSizeBytes)
 
@@ -101,13 +122,13 @@ func (p *Pouch) readRecordHeader(offset int64, r *Record) (uint64, error) {
 		if err == io.EOF {
 			return 0, err
 		}
-		return 0, fmt.Errorf("can't read record header size from pouch file: %w", err)
+		return 0, fmt.Errorf("can't read record header size from segment file: %w", err)
 	}
 	recordHeaderSize := binary.LittleEndian.Uint64(recordHeaderSizeBytes)
 
 	recordHeaderBytes := make([]byte, recordHeaderSize)
 	if _, err := p.file.ReadAt(recordHeaderBytes, offset+MetaRecordSizeField+MetaRecordHeaderSizeField); err != nil {
-		return 0, fmt.Errorf("can't read record byte data from pouch file: %w", err)
+		return 0, fmt.Errorf("can't read record byte data from segment file: %w", err)
 	}
 
 	if err := ParseRecord(recordHeaderBytes, r); err != nil {
@@ -119,7 +140,7 @@ func (p *Pouch) readRecordHeader(offset int64, r *Record) (uint64, error) {
 
 // readRecord .
 // [8 Record Size][8 RecordHeaderSize][RecordHeader][RecordData]
-func (p *Pouch) readRecord(offset int64, r *Record) (uint64, error) {
+func (p *segment) readRecord(offset int64, r *Record) (uint64, error) {
 	p.fileMutex.RLock()
 	defer p.fileMutex.RUnlock()
 	if p.closed {
@@ -131,13 +152,13 @@ func (p *Pouch) readRecord(offset int64, r *Record) (uint64, error) {
 		if err == io.EOF {
 			return 0, err
 		}
-		return 0, fmt.Errorf("can't read record size from pouch file: %w", err)
+		return 0, fmt.Errorf("can't read record size from segment file: %w", err)
 	}
 	recordSize := binary.LittleEndian.Uint64(recordSizeBytes)
 
 	recordBytes := make([]byte, recordSize)
 	if _, err := p.file.ReadAt(recordBytes, offset+MetaRecordSizeField+MetaRecordHeaderSizeField); err != nil {
-		return 0, fmt.Errorf("can't read record byte data from pouch file: %w", err)
+		return 0, fmt.Errorf("can't read record byte data from segment file: %w", err)
 	}
 
 	if err := ParseRecord(recordBytes, r); err != nil {
@@ -149,7 +170,7 @@ func (p *Pouch) readRecord(offset int64, r *Record) (uint64, error) {
 
 // writeRecord .
 // [8 Record Size][8 RecordHeaderSize][RecordHeader][RecordData]
-func (p *Pouch) writeRecord(r *Record) (int64, error) {
+func (p *segment) writeRecord(r *Record) (int64, error) {
 	p.fileMutex.Lock()
 	defer p.fileMutex.Unlock()
 	if p.closed {
@@ -184,7 +205,7 @@ func (p *Pouch) writeRecord(r *Record) (int64, error) {
 	b = append(b, r.Data...)
 
 	if _, err := p.file.Write(b); err != nil {
-		return 0, fmt.Errorf("can't write to pouch file: %w", err)
+		return 0, fmt.Errorf("can't write to segment file: %w", err)
 	}
 
 	if err := p.file.Sync(); err != nil {
@@ -199,9 +220,9 @@ func (p *Pouch) writeRecord(r *Record) (int64, error) {
 	return offset, nil
 }
 
-// StreamRecords returns a channel which will receive all records in the pouch file.
+// StreamRecords returns a channel which will receive all records in the segment file.
 // HeadOnly = true returns only header data
-func (p *Pouch) StreamRecords(headOnly bool) <-chan Envelope {
+func (p *segment) StreamRecords(headOnly bool) <-chan Envelope {
 	stream := make(chan Envelope)
 	go func() {
 		var offset int64 = 0
@@ -229,9 +250,9 @@ func (p *Pouch) StreamRecords(headOnly bool) <-chan Envelope {
 	return stream
 }
 
-// StreamLatestRecords returns a channel which will receive the latest records in the pouch file. each key at least ones.
+// StreamLatestRecords returns a channel which will receive the latest records in the segment file. each key at least ones.
 // HeadOnly = true returns only header data
-func (p *Pouch) StreamLatestRecords(headOnly bool) <-chan Envelope {
+func (p *segment) StreamLatestRecords(headOnly bool) <-chan Envelope {
 	stream := make(chan Envelope)
 	go func() {
 		latestOffsets := p.LastOffsets()
@@ -257,14 +278,14 @@ func (p *Pouch) StreamLatestRecords(headOnly bool) <-chan Envelope {
 	return stream
 }
 
-// Name returns the name of the pouch as presented to Open.
-func (p *Pouch) Name() string {
+// Name returns the name of the segment as presented to Open.
+func (p *segment) Name() string {
 	return p.name
 }
 
-// Close closes the pouch, make it unusable for I/O.
+// Close closes the segment, make it unusable for I/O.
 // Close will return an error if it has already been called.
-func (p *Pouch) Close() error {
+func (p *segment) Close() error {
 	p.fileMutex.Lock()
 	defer p.fileMutex.Unlock()
 	p.closed = true
@@ -272,8 +293,8 @@ func (p *Pouch) Close() error {
 	return p.file.Close()
 }
 
-// ReadByOffset reads the record at a given offset in the pouch file
-func (p *Pouch) ReadByOffset(offset int64, headOnly bool, r *Record) error {
+// ReadByOffset reads the record at a given offset in the segment file
+func (p *segment) ReadByOffset(offset int64, headOnly bool, r *Record) error {
 	var err error
 	if headOnly {
 		_, err = p.readRecordHeader(offset, r)
@@ -292,7 +313,7 @@ func (p *Pouch) ReadByOffset(offset int64, headOnly bool, r *Record) error {
 }
 
 // ReadByHash reads the latest record for a given key hash value
-func (p *Pouch) ReadByHash(keyHash uint64, headOnly bool, r *Record) error {
+func (p *segment) ReadByHash(keyHash uint64, headOnly bool, r *Record) error {
 	p.dataMutex.RLock()
 	defer p.dataMutex.RUnlock()
 	if _, ok := p.recordKeyOffsets[keyHash]; !ok {
@@ -306,20 +327,20 @@ func (p *Pouch) ReadByHash(keyHash uint64, headOnly bool, r *Record) error {
 }
 
 // ReadByKey reads the latest record for a given key
-func (p *Pouch) ReadByKey(key Key, headOnly bool, r *Record) error {
+func (p *segment) ReadByKey(key Key, headOnly bool, r *Record) error {
 	return p.ReadByHash(key.Hash(), headOnly, r)
 }
 
-// Write writes the given key and data as a record at the end of the pouch
-func (p *Pouch) Write(key Key, data Data) (int64, error) {
+// Write writes the given key and data as a record at the end of the segment
+func (p *segment) Write(key Key, data Data) (int64, error) {
 	return p.WriteRecord(&Record{
 		Key:  key,
 		Data: data,
 	})
 }
 
-// WriteRecord writes the given record at the end of the pouch
-func (p *Pouch) WriteRecord(record *Record) (int64, error) {
+// WriteRecord writes the given record at the end of the segment
+func (p *segment) WriteRecord(record *Record) (int64, error) {
 	offset, err := p.writeRecord(record)
 	if err != nil {
 		return 0, WriteErr{Err: err}
@@ -328,7 +349,7 @@ func (p *Pouch) WriteRecord(record *Record) (int64, error) {
 }
 
 // Truncate - removes all records whose offset is greater or equal to offset. the removal is permanently.
-func (p *Pouch) Truncate(_dumpOffset int64) error {
+func (p *segment) Truncate(_dumpOffset int64) error {
 	p.fileMutex.Lock()
 	defer p.fileMutex.Unlock()
 	if p.closed {
@@ -341,7 +362,7 @@ func (p *Pouch) Truncate(_dumpOffset int64) error {
 	}
 	currentOffset := info.Size()
 	if currentOffset <= _dumpOffset {
-		return fmt.Errorf("can't truncate pouch. _dumpOffset to big")
+		return fmt.Errorf("can't truncate segment. _dumpOffset to big")
 	}
 	p.dataMutex.Lock()
 	defer p.dataMutex.Unlock()
@@ -376,8 +397,8 @@ func (p *Pouch) Truncate(_dumpOffset int64) error {
 	return nil
 }
 
-// Size returns the byte size of the pouch file
-func (p *Pouch) Size() (int64, error) {
+// Size returns the byte size of the segment file
+func (p *segment) Size() (int64, error) {
 	// can't use seek function since file is append mode - use os.Stat instead
 	info, err := os.Stat(p.name)
 	if err != nil {
@@ -386,8 +407,8 @@ func (p *Pouch) Size() (int64, error) {
 	return info.Size(), nil
 }
 
-// LastOffset returns the offset of the last record which was written to the pouch file
-func (p *Pouch) LastOffset() int64 {
+// LastOffset returns the offset of the last record which was written to the segment file
+func (p *segment) LastOffset() int64 {
 	p.dataMutex.RLock()
 	defer p.dataMutex.RUnlock()
 	if n := p.Count(); n > 0 {
@@ -396,7 +417,7 @@ func (p *Pouch) LastOffset() int64 {
 	return 0
 }
 
-func (p *Pouch) LastOffsets() []int64 {
+func (p *segment) LastOffsets() []int64 {
 	p.dataMutex.RLock()
 	defer p.dataMutex.RUnlock()
 	offsets := make([]int64, 0, len(p.recordKeyOffsets))
@@ -412,7 +433,7 @@ func (p *Pouch) LastOffsets() []int64 {
 }
 
 // LastOffsetForKey returns the offset of the last record for a given key
-func (p *Pouch) LastOffsetForKey(key Key) (int64, error) {
+func (p *segment) LastOffsetForKey(key Key) (int64, error) {
 	p.dataMutex.RLock()
 	defer p.dataMutex.RUnlock()
 	if _, ok := p.recordKeyOffsets[key.Hash()]; !ok {
@@ -426,18 +447,18 @@ func (p *Pouch) LastOffsetForKey(key Key) (int64, error) {
 	return recordOffsets[len(recordOffsets)-1], nil
 }
 
-// IsClosed returns true if the pouch is already closed
-func (p *Pouch) IsClosed() bool {
+// IsClosed returns true if the segment is already closed
+func (p *segment) IsClosed() bool {
 	return p.closed
 }
 
-// Count returns the amount of records in the pouch
-func (p *Pouch) Count() uint64 {
+// Count returns the amount of records in the segment
+func (p *segment) Count() uint64 {
 	return uint64(len(p.recordOffsets))
 }
 
-// Snapshot creates a snapshot of the current pouch. the pouch file content will be copied to a new file called name
-func (p *Pouch) Snapshot(name string) error {
+// Snapshot creates a snapshot of the current segment. the segment file content will be copied to a new file called name
+func (p *segment) Snapshot(name string) error {
 	if _, err := os.Stat(name); !os.IsNotExist(err) {
 		return fmt.Errorf("file with name %s already exists: %w", name, err)
 	}
@@ -453,7 +474,7 @@ func (p *Pouch) Snapshot(name string) error {
 
 	pfile, err := os.Open(p.name)
 	if err != nil {
-		return fmt.Errorf("can't open pouch file: %w", err)
+		return fmt.Errorf("can't open segment file: %w", err)
 	}
 	defer pfile.Close()
 
@@ -464,8 +485,8 @@ func (p *Pouch) Snapshot(name string) error {
 	return nil
 }
 
-// Remove deletes the pouch file from disk
-func (p *Pouch) Remove() error {
+// Remove deletes the segment file from disk
+func (p *segment) Remove() error {
 	p.dataMutex.RLock()
 	defer p.dataMutex.RUnlock()
 	if !p.closed {
@@ -473,7 +494,7 @@ func (p *Pouch) Remove() error {
 	}
 
 	if err := os.Remove(p.name); err != nil {
-		return fmt.Errorf("can't delete pouch file from disk: %w", err)
+		return fmt.Errorf("can't delete segment file from disk: %w", err)
 	}
 	return nil
 }

@@ -2,7 +2,7 @@ package wal
 
 import (
 	"github.com/ljmsc/wal/bucket"
-	"github.com/ljmsc/wal/pouch"
+	"github.com/ljmsc/wal/segment"
 )
 
 const (
@@ -14,12 +14,12 @@ type Entry struct {
 	bucket.Record
 }
 
-func CreateEntry(key pouch.Key, data pouch.Data, metaRecords ...pouch.MetaRecord) *Entry {
+func CreateEntry(key segment.Key, data segment.Data, metaRecords ...segment.MetaRecord) *Entry {
 	return &Entry{Record: *bucket.CreateRecord(key, data, metaRecords...)}
 }
 
 func setVersion(version uint64, e *Entry) {
-	pouch.MetaPutUint64(VersionMetadataKey, version, e.Metadata)
+	segment.MetaPutUint64(VersionMetadataKey, version, e.Metadata)
 }
 
 func recordToEntry(r bucket.Record, e *Entry) error {

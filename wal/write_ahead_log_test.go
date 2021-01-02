@@ -24,7 +24,7 @@ func cleanup(dir string) {
 	}
 }
 
-func createTestLog(name string, dir string) *Wal {
+func createTestLog(name string, dir string) Wal {
 	b, err := Open(dir+name, 500, true, nil)
 	if err != nil {
 		panic(err)
@@ -35,7 +35,7 @@ func createTestLog(name string, dir string) *Wal {
 	return b
 }
 
-func createTestLogWithData(name string, dir string, loops int) *Wal {
+func createTestLogWithData(name string, dir string, loops int) Wal {
 	w := createTestLog(name, dir)
 	for i := 1; i <= loops; i++ {
 		eKey := []byte("key_" + strconv.Itoa(i))

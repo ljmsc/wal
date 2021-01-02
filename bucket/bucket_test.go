@@ -22,7 +22,7 @@ func cleanup(dir string) {
 	}
 }
 
-func createTestBucket(name string, dir string) *Bucket {
+func createTestBucket(name string, dir string) Bucket {
 	b, err := OpenWithSize(dir+name, 300)
 	if err != nil {
 		panic(err)
