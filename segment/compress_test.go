@@ -5,12 +5,13 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/stretchr/testify/assert"
+	"github.com/matryer/is"
 )
 
 var compressTestDir = "../tmp/compress/"
 
 func TestCompressSegmentToFile(t *testing.T) {
+	is := is.New(t)
 	prepare(compressTestDir)
 	defer cleanup(compressTestDir)
 	seg := createTestSegment("segment_test2", compressTestDir)
@@ -20,17 +21,17 @@ func TestCompressSegmentToFile(t *testing.T) {
 	defer targetSeg.Close()
 
 	for i := 1; i <= 20; i++ {
-		keySuffix := ((i - 1) % 5) + 1
-		testKey := []byte("test_key_" + strconv.Itoa(keySuffix))
+		testKey := uint64(((i - 1) % 5) + 1)
 		testData := []byte("test_data_" + strconv.Itoa(i))
 
-		_, err := seg.Write(testKey, testData)
-		assert.NoError(t, err)
+		_, err := seg.Write(createRecord(testKey, testData))
+		is.NoErr(err)
 	}
 
 	err := CompressToFile(seg, targetSeg)
-	assert.NoError(t, err)
+	is.NoErr(err)
 
-	assert.EqualValues(t, uint64(5), targetSeg.Count())
-	fmt.Println(targetSeg.Count())
+	length := len(targetSeg.Offsets())
+	is.Equal(5, length)
+	fmt.Println(length)
 }

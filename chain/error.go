@@ -7,11 +7,9 @@ import (
 )
 
 var (
-	ZeroSequenceErr                    = fmt.Errorf("sequence number is zero")
 	SegmentNotFoundErr                 = fmt.Errorf("no segment file for offset")
 	RecordNotFoundErr                  = fmt.Errorf("record not found")
 	ClosedErr                          = fmt.Errorf("bucket is closed")
-	MissingSequenceNumberFieldErr      = fmt.Errorf("sequence number field is missing in record metadata")
 	NotClosedErr                       = fmt.Errorf("bucket is open for read/write")
 	NotEnoughSegmentsForCompressionErr = fmt.Errorf("not enough segments for compression")
 )

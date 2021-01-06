@@ -1,4 +1,4 @@
-package bucket
+package chain
 
 import (
 	"os"
@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-var bucketTestDir = "../tmp/bucket/"
+var bucketTestDir = "../tmp/chain/"
 
 func prepare(dir string) {
 	if err := os.MkdirAll(dir, 0700); err != nil {
@@ -22,13 +22,13 @@ func cleanup(dir string) {
 	}
 }
 
-func createTestBucket(name string, dir string) Bucket {
+func createTestBucket(name string, dir string) Chain {
 	b, err := OpenWithSize(dir+name, 300)
 	if err != nil {
 		panic(err)
 	}
 	if b == nil {
-		panic("bucket " + name + " is nil")
+		panic("chain " + name + " is nil")
 	}
 	return b
 }
@@ -73,7 +73,7 @@ func TestBucketOpenWriteRead(t *testing.T) {
 		err := c.ReadBySequenceNumber(uint64(i), false, &r)
 		if assert.NoError(t, err) {
 			assert.EqualValues(t, testKey, r.Key)
-			assert.EqualValues(t, uint64(i), r.SequenceNumber())
+			assert.EqualValues(t, uint64(i), r.SeqNum())
 		}
 	}
 
@@ -96,7 +96,7 @@ func TestBucketOpenWriteRead(t *testing.T) {
 		err := c2.ReadBySequenceNumber(uint64(i), false, &r)
 		if assert.NoError(t, err) {
 			assert.EqualValues(t, testKey, r.Key)
-			assert.EqualValues(t, uint64(i), r.SequenceNumber())
+			assert.EqualValues(t, uint64(i), r.SeqNum())
 		}
 	}
 
@@ -107,7 +107,7 @@ func TestBucketOpenWriteRead(t *testing.T) {
 		err := c2.ReadByKey(testKey, false, &r)
 		if assert.NoError(t, err) {
 			assert.EqualValues(t, testKey, r.Key)
-			assert.EqualValues(t, uint64(i), r.SequenceNumber())
+			assert.EqualValues(t, uint64(i), r.SeqNum())
 			assert.EqualValues(t, testData, r.Data)
 		}
 	}
