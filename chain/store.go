@@ -1,4 +1,4 @@
-package bucket
+package chain
 
 import (
 	"bytes"
@@ -12,12 +12,12 @@ type storeRecord struct {
 	segmentNames []string
 }
 
-func (s storeRecord) Key() uint64 {
+func (s *storeRecord) Key() uint64 {
 	// All records should have the same key
 	return 1
 }
 
-func (s storeRecord) Encode() ([]byte, error) {
+func (s *storeRecord) Encode() ([]byte, error) {
 	segmentNames := strings.Join(s.segmentNames, ",")
 	buf := bytes.Buffer{}
 	_, err := buf.WriteString(segmentNames)
@@ -27,7 +27,7 @@ func (s storeRecord) Encode() ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-func (s storeRecord) Decode(_ uint64, _payload []byte) error {
+func (s *storeRecord) Decode(_ uint64, _payload []byte) error {
 	buf := bytes.NewBuffer(_payload)
 	s.segmentNames = strings.Split(buf.String(), ",")
 	return nil
@@ -57,6 +57,7 @@ func openStore(name string) (*store, error) {
 		if err := s.segment.ReadAt(&r, s.segment.Offset()); err != nil {
 			return nil, fmt.Errorf("can't read latest list of segment names from store file: %w", err)
 		}
+		s.latestRecord = &r
 	}
 
 	return &s, nil
@@ -76,6 +77,10 @@ func (s *store) update(nameList []string) error {
 	}
 	s.latestRecord = &r
 	return nil
+}
+
+func (s *store) length() uint64 {
+	return uint64(len(s.latestRecord.segmentNames))
 }
 
 func (s *store) close() error {

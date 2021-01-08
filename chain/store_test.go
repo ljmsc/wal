@@ -1,4 +1,4 @@
-package bucket
+package chain
 
 import (
 	"testing"
@@ -32,6 +32,8 @@ func TestUpdateAndGetStore(t *testing.T) {
 	err = store.update(testSegmentNames)
 	is.NoErr(err)
 
+	is.Equal(uint64(3), store.length())
+
 	is.Equal(testSegmentNames, store.get())
 
 	err = store.close()
@@ -39,6 +41,7 @@ func TestUpdateAndGetStore(t *testing.T) {
 
 	store2, err := openStore(storeTestDir + "test_update_get")
 	is.NoErr(err)
+	is.Equal(uint64(3), store2.length())
 
 	is.Equal(testSegmentNames, store2.get())
 }

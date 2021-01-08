@@ -1,7 +1,6 @@
 package wal
 
 import (
-	"github.com/ljmsc/wal/bucket"
 	"github.com/ljmsc/wal/segment"
 )
 
@@ -11,18 +10,18 @@ const (
 
 // Entry is a log entry in the write ahead log
 type Entry struct {
-	bucket.Record
+	chain.Record
 }
 
 func CreateEntry(key segment.Key, data segment.Data, metaRecords ...segment.MetaRecord) *Entry {
-	return &Entry{Record: *bucket.CreateRecord(key, data, metaRecords...)}
+	return &Entry{Record: *chain.CreateRecord(key, data, metaRecords...)}
 }
 
 func setVersion(version uint64, e *Entry) {
 	segment.MetaPutUint64(VersionMetadataKey, version, e.Metadata)
 }
 
-func recordToEntry(r bucket.Record, e *Entry) error {
+func recordToEntry(r chain.Record, e *Entry) error {
 	if _, ok := r.Metadata[VersionMetadataKey]; !ok {
 		return MissingVersionErr
 	}
@@ -32,7 +31,7 @@ func recordToEntry(r bucket.Record, e *Entry) error {
 	return nil
 }
 
-func (e Entry) toRecord(r *bucket.Record) {
+func (e Entry) toRecord(r *chain.Record) {
 	*r = e.Record
 }
 

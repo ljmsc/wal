@@ -4,7 +4,6 @@ import (
 	"encoding/binary"
 	"testing"
 
-	"github.com/ljmsc/wal/bucket"
 	"github.com/ljmsc/wal/segment"
 
 	"github.com/stretchr/testify/assert"
@@ -44,9 +43,9 @@ func TestRecordToEntryToRecord(t *testing.T) {
 	versionBytes := make([]byte, 8)
 	binary.LittleEndian.PutUint64(versionBytes, testVersion)
 
-	record := bucket.CreateRecord(testKey, testData,
+	record := chain.CreateRecord(testKey, testData,
 		segment.MetaRecord{
-			Name: bucket.SequenceNumberMetadataKey,
+			Name: chain.SequenceNumberMetadataKey,
 			Data: seqNumBytes,
 		}, segment.MetaRecord{
 			Name: VersionMetadataKey,
@@ -63,7 +62,7 @@ func TestRecordToEntryToRecord(t *testing.T) {
 	assert.EqualValues(t, testSeqNum, entry.SequenceNumber(), "sequence number")
 	assert.EqualValues(t, testVersion, entry.Version(), "version")
 
-	record2 := bucket.Record{}
+	record2 := chain.Record{}
 	entry.toRecord(&record2)
 
 	assert.EqualValues(t, testKey, record2.Key)
@@ -80,7 +79,7 @@ func TestEntryVersion(t *testing.T) {
 	binary.LittleEndian.PutUint64(seqNumBytes, 42)
 
 	entry := CreateEntry(testKey, testData, segment.MetaRecord{
-		Name: bucket.SequenceNumberMetadataKey,
+		Name: chain.SequenceNumberMetadataKey,
 		Data: seqNumBytes,
 	})
 

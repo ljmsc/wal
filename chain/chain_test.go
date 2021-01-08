@@ -2,13 +2,18 @@ package chain
 
 import (
 	"os"
+	"sort"
 	"strconv"
 	"testing"
+
+	"github.com/ljmsc/wal/segment"
+
+	"github.com/matryer/is"
 
 	"github.com/stretchr/testify/assert"
 )
 
-var bucketTestDir = "../tmp/chain/"
+var chainTestDir = "../tmp/chain/"
 
 func prepare(dir string) {
 	if err := os.MkdirAll(dir, 0700); err != nil {
@@ -22,8 +27,8 @@ func cleanup(dir string) {
 	}
 }
 
-func createTestBucket(name string, dir string) Chain {
-	b, err := OpenWithSize(dir+name, 300)
+func createTestChain(name string, dir string) Chain {
+	b, err := Open(dir+name, 0, 300, nil)
 	if err != nil {
 		panic(err)
 	}
@@ -33,175 +38,178 @@ func createTestBucket(name string, dir string) Chain {
 	return b
 }
 
-func TestBucketOpen(t *testing.T) {
-	prepare(bucketTestDir)
-	defer cleanup(bucketTestDir)
-	c, err := OpenWithHandler(bucketTestDir+"chain_open", true, nil)
+func TestOpen(t *testing.T) {
+	is := is.New(t)
+	prepare(chainTestDir)
+	defer cleanup(chainTestDir)
+	c, err := Open(chainTestDir+"chain_open", 0, 0, nil)
 
-	if !assert.NoError(t, err) {
-		return
-	}
-	if !assert.NotNil(t, c) {
-		return
-	}
+	is.NoErr(err)
+	is.True(c != nil)
 
 	err = c.Close()
-	assert.NoError(t, err)
+	is.NoErr(err)
 }
 
-func TestBucketOpenWriteRead(t *testing.T) {
-	prepare(bucketTestDir)
-	defer cleanup(bucketTestDir)
-	c, err := OpenWithSize(bucketTestDir+"chain_read_write", 300)
+func TestOpenWriteRead(t *testing.T) {
+	is := is.New(t)
+	cleanup(chainTestDir)
+	prepare(chainTestDir)
+	c, err := Open(chainTestDir+"chain_read_write", 0, 300, nil)
+	is.NoErr(err)
 
-	if !assert.NoError(t, err) {
-		return
-	}
-	if !assert.NotNil(t, c) {
-		return
-	}
 	for i := 1; i <= 30; i++ {
-		testKey := []byte("chain_test_key_" + strconv.Itoa(i))
+		testKey := uint64(i)
 		testData := []byte("chain_test_data_" + strconv.Itoa(i))
-		err := c.Write(testKey, testData)
-		assert.NoError(t, err)
+
+		r := record{
+			key:  testKey,
+			data: testData,
+		}
+		_, err := c.Write(&r)
+		is.NoErr(err)
 	}
 
+	is.Equal(uint64(30), c.Length())
+
 	for i := 1; i <= 30; i++ {
-		testKey := []byte("chain_test_key_" + strconv.Itoa(i))
-		r := Record{}
-		err := c.ReadBySequenceNumber(uint64(i), false, &r)
-		if assert.NoError(t, err) {
-			assert.EqualValues(t, testKey, r.Key)
-			assert.EqualValues(t, uint64(i), r.SeqNum())
-		}
+		testKey := uint64(i)
+		testData := []byte("chain_test_data_" + strconv.Itoa(i))
+		r := record{}
+		err := c.ReadAt(&r, testKey)
+		is.NoErr(err)
+		is.Equal(testKey, r.Key())
+		is.Equal(uint64(i), r.SeqNum())
+		is.Equal(len(testData), len(r.Data()))
+		is.Equal(testData, r.Data())
 	}
 
 	err = c.Close()
-	if !assert.NoError(t, err) {
-		return
-	}
+	is.NoErr(err)
 
-	c2, err := OpenWithSize(bucketTestDir+"chain_read_write", 300)
-	if !assert.NoError(t, err) {
-		return
-	}
-	if !assert.NotNil(t, c2) {
-		return
-	}
+	c2, err := Open(chainTestDir+"chain_read_write", 0, 300, nil)
+	is.NoErr(err)
+
+	is.Equal(uint64(30), c2.Length())
 
 	for i := 1; i <= 30; i++ {
-		testKey := []byte("chain_test_key_" + strconv.Itoa(i))
-		r := Record{}
-		err := c2.ReadBySequenceNumber(uint64(i), false, &r)
-		if assert.NoError(t, err) {
-			assert.EqualValues(t, testKey, r.Key)
-			assert.EqualValues(t, uint64(i), r.SeqNum())
-		}
-	}
-
-	for i := 1; i <= 30; i++ {
-		testKey := []byte("chain_test_key_" + strconv.Itoa(i))
+		testKey := uint64(i)
 		testData := []byte("chain_test_data_" + strconv.Itoa(i))
-		r := Record{}
-		err := c2.ReadByKey(testKey, false, &r)
-		if assert.NoError(t, err) {
-			assert.EqualValues(t, testKey, r.Key)
-			assert.EqualValues(t, uint64(i), r.SeqNum())
-			assert.EqualValues(t, testData, r.Data)
-		}
+		r := record{}
+		err := c2.ReadKey(&r, testKey)
+		is.NoErr(err)
+		is.Equal(testKey, r.Key())
+		is.Equal(uint64(i), r.SeqNum())
+		is.Equal(len(testData), len(r.Data()))
+		is.Equal(testData, r.Data())
 	}
 
 	err = c2.Close()
 	assert.NoError(t, err)
 }
 
-func TestBucketStreamLatestRecords(t *testing.T) {
-	prepare(bucketTestDir)
-	defer cleanup(bucketTestDir)
-	b := createTestBucket("segment_test2", bucketTestDir)
-	defer b.Close()
+func TestKeys(t *testing.T) {
+	is := is.New(t)
+	prepare(chainTestDir)
+	defer cleanup(chainTestDir)
+	c := createTestChain("segment_test2", chainTestDir)
+	defer c.Close()
 
 	for i := 1; i <= 20; i++ {
-		keySuffix := ((i - 1) % 5) + 1
-		testKey := []byte("test_key_" + strconv.Itoa(keySuffix))
+		testKey := uint64(i)
 		testData := []byte("test_data_" + strconv.Itoa(i))
+		r := record{
+			key:  testKey,
+			data: testData,
+		}
 
-		err := b.Write(testKey, testData)
-		assert.NoError(t, err)
+		_, err := c.Write(&r)
+		is.NoErr(err)
+	}
+	keys := Keys(c)
+	is.Equal(len(keys), 20)
+	sort.Slice(keys, func(i, j int) bool {
+		if keys[i] < keys[j] {
+			return true
+		}
+		return false
+	})
+	for i := 1; i <= 20; i++ {
+		is.Equal(uint64(i), keys[i-1])
+	}
+}
+
+func TestStream(t *testing.T) {
+	is := is.New(t)
+	prepare(chainTestDir)
+	defer cleanup(chainTestDir)
+	c := createTestChain("segment_test2", chainTestDir)
+	defer c.Close()
+
+	for i := 1; i <= 20; i++ {
+		testKey := uint64(((i - 1) % 5) + 1)
+		testData := []byte("test_data_" + strconv.Itoa(i))
+		r := record{
+			key:  testKey,
+			data: testData,
+		}
+
+		_, err := c.Write(&r)
+		is.NoErr(err)
 	}
 
 	counter := 0
-	stream := b.StreamLatestRecords(true)
-	for {
-		item, ok := <-stream
-		if !ok {
-			break
-		}
-		if !assert.NoError(t, item.Err) {
+	stream := Stream(c, 0, 0)
+	for envelope := range stream {
+		if envelope.Err != nil {
+			is.NoErr(envelope.Err)
 			continue
 		}
 		counter++
 	}
-	assert.EqualValues(t, 5, counter)
+	is.Equal(20, counter)
 }
 
-func TestCompressBucket(t *testing.T) {
-	prepare(bucketTestDir)
-	defer cleanup(bucketTestDir)
-	b := createTestBucket("compressor", bucketTestDir)
-	defer b.Close()
-
-	for i := 1; i <= 200; i++ {
-		keySuffix := ((i - 1) % 5) + 1
-		testKey := []byte("test_key_" + strconv.Itoa(keySuffix))
-		testData := []byte("test_data_" + strconv.Itoa(i))
-
-		err := b.Write(testKey, testData)
-		assert.NoError(t, err)
-	}
-
-	sizeBefore, err := b.Size()
-
-	assert.NoError(t, err)
-	err = b.Compress()
-	assert.NoError(t, err)
-	sizeAfter, err := b.Size()
-	assert.NoError(t, err)
-
-	assert.LessOrEqual(t, sizeAfter, sizeBefore)
-}
-
-func TestDumpBucket(t *testing.T) {
-	prepare(bucketTestDir)
-	defer cleanup(bucketTestDir)
-	b := createTestBucket("dump", bucketTestDir)
-	defer b.Close()
+func TestTruncateChain(t *testing.T) {
+	is := is.New(t)
+	prepare(chainTestDir)
+	defer cleanup(chainTestDir)
+	c := createTestChain("dump", chainTestDir)
+	defer c.Close()
 
 	for i := 1; i <= 20; i++ {
-		testKey := []byte("test_key_" + strconv.Itoa(i))
+		testKey := uint64(i)
 		testData := []byte("test_data_" + strconv.Itoa(i))
+		r := record{
+			key:  testKey,
+			data: testData,
+		}
 
-		err := b.Write(testKey, testData)
-		assert.NoError(t, err)
+		_, err := c.Write(&r)
+		is.NoErr(err)
 	}
 
-	seqNumbers := b.LatestSequenceNumbers()
-	assert.EqualValues(t, 20, len(seqNumbers))
+	seqNumber := c.SeqNum()
+	assert.EqualValues(t, 20, seqNumber)
 
-	dumpNum := seqNumbers[10]
+	dumpNum := uint64(10)
 
-	err := b.Dump(dumpNum)
-	assert.NoError(t, err)
+	err := c.Truncate(dumpNum)
+	is.NoErr(err)
 
-	r := Record{}
-	err = b.ReadBySequenceNumber(dumpNum, true, &r)
-	assert.EqualError(t, err, RecordNotFoundErr.Error())
+	r := record{}
+	err = c.ReadAt(&r, dumpNum)
+	if err == nil {
+		is.Fail()
+	}
+	is.Equal(err.Error(), segment.RecordNotFoundErr.Error())
 
-	r2 := Record{}
-	err = b.ReadBySequenceNumber(b.LatestSequenceNumber(), true, &r2)
-	assert.Error(t, err)
+	r2 := record{}
+	err = c.ReadAt(&r2, c.SeqNum())
+	is.NoErr(err)
 
-	seqNumbers2 := b.LatestSequenceNumbers()
-	assert.EqualValues(t, 10, len(seqNumbers2))
+	is.Equal(uint64(9), c.Length())
+
+	is.Equal(c.Length(), uint64(len(c.Positions())))
+
 }
