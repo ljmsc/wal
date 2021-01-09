@@ -6,51 +6,51 @@ import (
 	"fmt"
 )
 
-// [Record [Record Header [Key Hash 8][Data Size 8]][Record Data ~]]...
-
 const (
-	headerKeyHashFieldLength     = 8
 	headerPayloadSizeFieldLength = 8
 	headerLength                 = headerKeyHashFieldLength + headerPayloadSizeFieldLength
 )
 
+func DecodeUint64(_raw []byte) uint64 {
+	return binary.LittleEndian.Uint64(_raw)
+}
+
+func EncodeUint64(value uint64) []byte {
+	raw := make([]byte, 8)
+	binary.LittleEndian.PutUint64(raw, value)
+	return raw
+}
+
 type Header struct {
-	Key          uint64
 	PayloadSize  uint64
+	Key          uint64
 	PaddingBytes []byte
 }
 
 func decodeHeader(_header *Header, _raw []byte) error {
-	if len(_raw) < headerLength {
+	if len(_raw) < headerPayloadSizeFieldLength {
 		return fmt.Errorf("not enough bytes for decoding")
 	}
-
-	_header.Key = binary.LittleEndian.Uint64(_raw[:headerKeyHashFieldLength])
-	if _header.Key == 0 {
-		return fmt.Errorf("key hash is zero")
+	var err error
+	_header.PayloadSize = DecodeUint64(_raw[:headerPayloadSizeFieldLength])
+	_header.Key, err = decodeKey(_raw[headerPayloadSizeFieldLength:headerLength])
+	if err != nil {
+		return err
 	}
-	_header.PayloadSize = binary.LittleEndian.Uint64(_raw[headerKeyHashFieldLength:headerLength])
-
+	_header.PaddingBytes = _raw[headerLength:]
 	return nil
 }
 
 func encodeHeader(_header Header) ([]byte, error) {
-	if _header.Key == 0 {
-		return nil, fmt.Errorf("Header Key is zero")
-	}
-
 	if _header.PayloadSize == 0 {
 		return nil, fmt.Errorf("Header PayloadSize is zero")
 	}
 
 	buff := bytes.Buffer{}
-	rawKeyHash := make([]byte, headerKeyHashFieldLength)
-	binary.LittleEndian.PutUint64(rawKeyHash, _header.Key)
-	buff.Write(rawKeyHash)
-
-	rawPayloadSize := make([]byte, headerPayloadSizeFieldLength)
-	binary.LittleEndian.PutUint64(rawPayloadSize, _header.PayloadSize)
-	buff.Write(rawPayloadSize)
+	buff.Write(EncodeUint64(_header.PayloadSize))
+	rawKey := EncodeUint64(_header.Key)
+	buff.Write(rawKey)
+	buff.Write(_header.PaddingBytes)
 
 	return buff.Bytes(), nil
 }
@@ -59,56 +59,31 @@ func encodeHeader(_header Header) ([]byte, error) {
 func encode(_record Record) ([]byte, error) {
 	buff := bytes.Buffer{}
 
-	payload, err := _record.Encode()
-	if err != nil {
-		return nil, fmt.Errorf("can't encode record payload")
-	}
-
-	header := Header{
-		Key:         _record.Key(),
-		PayloadSize: uint64(len(payload)),
-	}
-
-	rawHeader, err := encodeHeader(header)
+	rawRecord, err := _record.Encode()
 	if err != nil {
 		return nil, err
 	}
 
-	n, err := buff.Write(rawHeader)
-	if err != nil {
-		return nil, fmt.Errorf("can't encode record Header: %w", err)
-	}
-
-	if n != len(rawHeader) {
-		return nil, fmt.Errorf("can't encode record Header")
-	}
-
-	buff.Write(payload)
+	// add header information
+	buff.Write(EncodeUint64(uint64(len(rawRecord))))
+	buff.Write(rawRecord)
 
 	return buff.Bytes(), nil
 }
 
-// decode decodes the byte slices into the given record object including the Header information.
+// decode decodes the byte slices into the given record object.
 func decode(_record Record, _raw []byte) error {
 	header := Header{}
 	if err := decodeHeader(&header, _raw[:headerLength]); err != nil {
 		return err
 	}
-
-	if err := _record.Decode(header.Key, _raw[headerLength:]); err != nil {
-		return fmt.Errorf("can't decode record payload")
+	if header.PayloadSize != uint64(len(_raw[headerPayloadSizeFieldLength:])) {
+		return fmt.Errorf("not enough bytes to decode record")
 	}
 
-	return nil
-}
-
-// decodeWithPadding decodes the byte slice into the given Header object
-func decodeWithPadding(_header *Header, _raw []byte) error {
-	if err := decodeHeader(_header, _raw[:headerLength]); err != nil {
+	if err := _record.Decode(_raw[headerPayloadSizeFieldLength:]); err != nil {
 		return err
 	}
-
-	_header.PaddingBytes = _raw[headerLength:]
 
 	return nil
 }

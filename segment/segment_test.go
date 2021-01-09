@@ -91,8 +91,8 @@ func TestOpenReadWrite(t *testing.T) {
 	is.NoErr(err)
 	is.Equal(size, int64(575))
 
-	offsets = seg2.Offsets()
-	is.Equal(len(offsets), 15)
+	offsets2 := seg2.Offsets()
+	is.Equal(len(offsets2), 15)
 
 	for i := 0; i < 15; i++ {
 		testKey := uint64(i + 1)
@@ -101,7 +101,8 @@ func TestOpenReadWrite(t *testing.T) {
 		err := seg2.ReadKey(&testReadRecord, testKey)
 		is.NoErr(err)
 		is.Equal(testKey, testReadRecord.Key())
-		is.Equal(len(testData), len(testReadRecord.Data()))
+		is.Equal(len(testData), len(testReadRecord.data))
+		is.Equal(string(testData), string(testReadRecord.data))
 	}
 
 	for i := 15; i < 20; i++ {

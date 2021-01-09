@@ -7,7 +7,7 @@ import (
 )
 
 // Segment File format
-// [Record [Record Header [Key 8][Data Size 8]][Record Data ~]]...
+// [Record [Record Header [Data Size 8][Key 8]][Record Data ~]]...
 
 // Segment .
 type Segment interface {
@@ -354,7 +354,7 @@ func (s *segment) streamHeaderWithPadding(_padding uint64) <-chan HeaderEnvelope
 				return
 			}
 			h := Header{}
-			if err := decodeWithPadding(&h, raw); err != nil {
+			if err := decodeHeader(&h, raw); err != nil {
 				stream <- HeaderEnvelope{Err: err}
 				return
 			}
@@ -364,7 +364,7 @@ func (s *segment) streamHeaderWithPadding(_padding uint64) <-chan HeaderEnvelope
 				Header: h,
 			}
 
-			currOffset += headerLength + int64(h.PayloadSize)
+			currOffset += headerPayloadSizeFieldLength + int64(h.PayloadSize)
 		}
 	}()
 
