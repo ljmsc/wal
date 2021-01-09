@@ -6,9 +6,9 @@ import (
 	"strconv"
 	"testing"
 
+	"github.com/matryer/is"
+
 	"github.com/ljmsc/wal/segment"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 const (
@@ -19,53 +19,52 @@ const (
 	writeLoops = 100
 )
 
-func BenchmarkKeyHash(b *testing.B) {
-	testKey := segment.Key("key_test")
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		_ = testKey.Hash()
-	}
-}
-
-func BenchmarkBasicWrite(b *testing.B) {
+func BenchmarkWriteBasic(b *testing.B) {
+	is := is.New(b)
 	prepare(benchBasicTestDir)
 	defer cleanup(benchBasicTestDir)
 
 	basicFile, err := os.Create(benchBasicTestFile)
-	require.NoError(b, err)
+	is.NoErr(err)
 	defer basicFile.Close()
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		_, err := basicFile.Write([]byte("key_" + strconv.Itoa(i+1) + "_" + "data_" + strconv.Itoa(i+1)))
 		if err != nil {
-			assert.NoError(b, err)
+			is.NoErr(err)
+		}
+		err = basicFile.Sync()
+		if err != nil {
+			is.NoErr(err)
 		}
 	}
 }
 
-func BenchmarkSegmentWrite(b *testing.B) {
+func BenchmarkWriteSegment(b *testing.B) {
+	is := is.New(b)
 	prepare(benchTestDir)
 	defer cleanup(benchTestDir)
-	pou, err := segment.Open(benchTestDir + "test_bench_write")
-	require.NoError(b, err)
-	defer pou.Close()
+	_seg, err := segment.Open(benchTestDir+"test_bench_write", nil)
+	is.NoErr(err)
+	defer _seg.Close()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_, err := pou.Write([]byte("key_"+strconv.Itoa(i+1)), []byte("data_"+strconv.Itoa(i+1)))
+		r := segment.CreateRecord(uint64(i+1), []byte("data_"+strconv.Itoa(i+1)))
+		_, err := _seg.Write(r)
 		if err != nil {
-			assert.NoError(b, err)
+			is.NoErr(err)
 		}
 	}
 }
 
-func BenchmarkBasicRead(b *testing.B) {
+func BenchmarkReadBasic(b *testing.B) {
+	is := is.New(b)
 	prepare(benchBasicTestDir)
 	defer cleanup(benchBasicTestDir)
 
 	basicFile, err := os.OpenFile(benchBasicTestFile, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0600)
-	//basicFile, err := os.Create(benchBasicTestFile)
-	require.NoError(b, err)
+	is.NoErr(err)
 	defer basicFile.Close()
 
 	offsets := make([]int64, 0, writeLoops)
@@ -73,10 +72,14 @@ func BenchmarkBasicRead(b *testing.B) {
 		offset, _ := basicFile.Seek(0, 1)
 		data := []byte("key_" + strconv.Itoa(j) + "_" + "data_" + strconv.Itoa(j))
 		_, err := basicFile.Write(data)
-		assert.NoError(b, err)
+		if err != nil {
+			is.NoErr(err)
+		}
 
 		err = basicFile.Sync()
-		assert.NoError(b, err)
+		if err != nil {
+			is.NoErr(err)
+		}
 		offsets = append(offsets, offset)
 	}
 
@@ -86,78 +89,59 @@ func BenchmarkBasicRead(b *testing.B) {
 		data := make([]byte, 12)
 		_, err := basicFile.ReadAt(data, randOffset)
 		if err != nil {
-			assert.NoError(b, err)
+			is.NoErr(err)
 		}
 	}
 }
 
-func BenchmarkSegmentRead(b *testing.B) {
+func BenchmarkReadSegment(b *testing.B) {
+	is := is.New(b)
 	prepare(benchTestDir)
 	defer cleanup(benchTestDir)
-	pou, err := segment.Open(benchTestDir + "test_bench_read")
-	require.NoError(b, err)
-	defer pou.Close()
+	seg, err := segment.Open(benchTestDir+"test_bench_read", nil)
+	is.NoErr(err)
+	defer seg.Close()
 
 	for i := 0; i < writeLoops; i++ {
-		_, err := pou.Write([]byte("key_"+strconv.Itoa(i)), []byte("data_"+strconv.Itoa(i)))
-		assert.NoError(b, err)
+		r := segment.CreateRecord(uint64(i+1), []byte("data_"+strconv.Itoa(i+1)))
+		_, err := seg.Write(r)
+		is.NoErr(err)
 	}
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		randKeyIndex := rand.Intn(writeLoops)
-		r := segment.Record{}
-		err := pou.ReadByKey([]byte("key_"+strconv.Itoa(randKeyIndex)), false, &r)
+		randKeyIndex := rand.Intn(writeLoops) + 1
+		r := segment.CreateRecord(0, []byte{})
+		err := seg.ReadKey(r, uint64(randKeyIndex))
 		if err != nil {
-			assert.NoError(b, err)
+			is.NoErr(err)
 		}
 	}
 }
 
-func BenchmarkSegmentReadHeadOnly(b *testing.B) {
+func BenchmarkReadByOffsetSegment(b *testing.B) {
+	is := is.New(b)
 	prepare(benchTestDir)
 	defer cleanup(benchTestDir)
-	pou, err := segment.Open(benchTestDir + "test_bench_read")
-	require.NoError(b, err)
-	defer pou.Close()
-
-	for i := 0; i < writeLoops; i++ {
-		_, err := pou.Write([]byte("key_"+strconv.Itoa(i)), []byte("data_"+strconv.Itoa(i)))
-		assert.NoError(b, err)
-	}
-
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		randKeyIndex := rand.Intn(writeLoops)
-		r := segment.Record{}
-		err := pou.ReadByKey([]byte("key_"+strconv.Itoa(randKeyIndex)), true, &r)
-		if err != nil {
-			assert.NoError(b, err)
-		}
-	}
-}
-
-func BenchmarkSegmentReadByOffset(b *testing.B) {
-	prepare(benchTestDir)
-	defer cleanup(benchTestDir)
-	pou, err := segment.Open(benchTestDir + "test_bench_read")
-	require.NoError(b, err)
-	defer pou.Close()
+	seg, err := segment.Open(benchTestDir+"test_bench_read", nil)
+	is.NoErr(err)
+	defer seg.Close()
 
 	offsets := make([]int64, 0, writeLoops)
 	for i := 0; i < writeLoops; i++ {
-		offset, err := pou.Write([]byte("key_"+strconv.Itoa(i)), []byte("data_"+strconv.Itoa(i)))
+		r := segment.CreateRecord(uint64(i+1), []byte("data_"+strconv.Itoa(i)))
+		offset, err := seg.Write(r)
 		offsets = append(offsets, offset)
-		assert.NoError(b, err)
+		is.NoErr(err)
 	}
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		randIndex := rand.Intn(writeLoops)
-		r := segment.Record{}
-		err := pou.ReadByOffset(offsets[randIndex], false, &r)
+		randIndex := rand.Intn(len(offsets) - 1)
+		r := segment.CreateRecord(0, []byte{})
+		err := seg.ReadAt(r, offsets[randIndex])
 		if err != nil {
-			assert.NoError(b, err)
+			is.NoErr(err)
 		}
 	}
 }
