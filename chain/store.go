@@ -12,6 +12,10 @@ type storeRecord struct {
 	segmentNames []string
 }
 
+func (s *storeRecord) SetKey(_key uint64) {
+	return
+}
+
 func (s *storeRecord) Key() uint64 {
 	// All records should have the same key
 	return 1
@@ -27,7 +31,7 @@ func (s *storeRecord) Encode() ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-func (s *storeRecord) Decode(_ uint64, _payload []byte) error {
+func (s *storeRecord) Decode(_payload []byte) error {
 	buf := bytes.NewBuffer(_payload)
 	s.segmentNames = strings.Split(buf.String(), ",")
 	return nil

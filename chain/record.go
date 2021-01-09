@@ -8,19 +8,46 @@ import (
 	"github.com/ljmsc/wal/segment"
 )
 
+// [Record [Record Header [Data Size 8][Key Hash 8]][Record Data ~]]...
+// [Record [Record Header [Data Size 8][Key Hash 8][SeqNum 8]][Record Data ~]]...
+
 const (
 	headerSequenceNumberFieldLength = 8
 )
 
 type Record interface {
-	// Key returns an unique identifier for the record
-	Key() uint64
+	segment.Record
 	// SeqNum returns the sequence number of the record
 	SeqNum() uint64
-	// SetSeqNum sets the sequence number to the record
+	// SetSeqNum sets the sequence number to the record. this is used only internal
 	SetSeqNum(_seqNum uint64)
-	// ForSegment returns the record as segment.Record
-	ForSegment() segment.Record
+}
+
+func EncodeFields(_record Record) ([]byte, error) {
+	if _record.SeqNum() == 0 {
+		return nil, fmt.Errorf("sequence number must be greater than zero")
+	}
+	raw, err := segment.EncodeFields(_record)
+	if err != nil {
+		return nil, err
+	}
+	buf := bytes.NewBuffer(raw)
+	buf.Write(segment.EncodeUint64(_record.SeqNum()))
+	return buf.Bytes(), nil
+}
+
+func DecodeFields(_record Record, _raw []byte) ([]byte, error) {
+	raw, err := segment.DecodeFields(_record, _raw)
+	if err != nil {
+		return nil, err
+	}
+
+	seqNum, err := decodeSeqNum(raw[:headerSequenceNumberFieldLength])
+	if err != nil {
+		return nil, err
+	}
+	_record.SetSeqNum(seqNum)
+	return raw[headerSequenceNumberFieldLength:], nil
 }
 
 // Record .
@@ -34,6 +61,10 @@ func (r *record) Key() uint64 {
 	return r.key
 }
 
+func (r *record) SetKey(_key uint64) {
+	r.key = _key
+}
+
 func (r *record) SeqNum() uint64 {
 	return r.sequenceNumber
 }
@@ -42,37 +73,23 @@ func (r *record) SetSeqNum(_seqNum uint64) {
 	r.sequenceNumber = _seqNum
 }
 
-func (r *record) Data() []byte {
-	return r.data
-}
-
 func (r *record) Encode() ([]byte, error) {
-	buf := bytes.Buffer{}
-	rawSeqNumber := encodeSeqNum(r.sequenceNumber)
-	buf.Write(rawSeqNumber)
+	raw, err := EncodeFields(r)
+	if err != nil {
+		return nil, err
+	}
+	buf := bytes.NewBuffer(raw)
 	buf.Write(r.data)
 	return buf.Bytes(), nil
 }
 
-func (r *record) Decode(_key uint64, _payload []byte) error {
-	r.key = _key
-	var err error
-	r.sequenceNumber, err = decodeSeqNum(_payload[:headerSequenceNumberFieldLength])
+func (r *record) Decode(_raw []byte) error {
+	data, err := DecodeFields(r, _raw)
 	if err != nil {
 		return err
 	}
-	r.data = _payload[headerSequenceNumberFieldLength:]
+	r.data = data
 	return nil
-}
-
-func (r *record) ForSegment() segment.Record {
-	return r
-}
-
-func encodeSeqNum(_seqNum uint64) []byte {
-	rawSeqNumber := make([]byte, headerSequenceNumberFieldLength)
-	binary.LittleEndian.PutUint64(rawSeqNumber, _seqNum)
-	return rawSeqNumber
 }
 
 func decodeSeqNum(_rawSeqNum []byte) (uint64, error) {

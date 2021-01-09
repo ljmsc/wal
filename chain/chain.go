@@ -166,7 +166,7 @@ func (c *chain) ReadAt(_record Record, _seqNum uint64) error {
 		return fmt.Errorf("segment not found")
 	}
 
-	if err := pos.Segment.ReadAt(_record.ForSegment(), pos.Offset); err != nil {
+	if err := pos.Segment.ReadAt(_record, pos.Offset); err != nil {
 		return err
 	}
 
@@ -200,7 +200,7 @@ func (c *chain) Write(_record Record) (uint64, error) {
 	newSeqNum := c.seqNum + 1
 	_record.SetSeqNum(newSeqNum)
 
-	offset, err := _segment.Write(_record.ForSegment())
+	offset, err := _segment.Write(_record)
 	if err != nil {
 		return 0, err
 	}

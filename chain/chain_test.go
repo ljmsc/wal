@@ -80,8 +80,8 @@ func TestOpenWriteRead(t *testing.T) {
 		is.NoErr(err)
 		is.Equal(testKey, r.Key())
 		is.Equal(uint64(i), r.SeqNum())
-		is.Equal(len(testData), len(r.Data()))
-		is.Equal(testData, r.Data())
+		is.Equal(len(testData), len(r.data))
+		is.Equal(testData, r.data)
 	}
 
 	err = c.Close()
@@ -100,8 +100,8 @@ func TestOpenWriteRead(t *testing.T) {
 		is.NoErr(err)
 		is.Equal(testKey, r.Key())
 		is.Equal(uint64(i), r.SeqNum())
-		is.Equal(len(testData), len(r.Data()))
-		is.Equal(testData, r.Data())
+		is.Equal(len(testData), len(r.data))
+		is.Equal(testData, r.data)
 	}
 
 	err = c2.Close()
