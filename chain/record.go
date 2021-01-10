@@ -8,9 +8,6 @@ import (
 	"github.com/ljmsc/wal/segment"
 )
 
-// [Record [Record Header [Data Size 8][Key Hash 8]][Record Data ~]]...
-// [Record [Record Header [Data Size 8][Key Hash 8][SeqNum 8]][Record Data ~]]...
-
 const (
 	headerSequenceNumberFieldLength = 8
 )

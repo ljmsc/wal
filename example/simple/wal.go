@@ -7,26 +7,27 @@ import (
 )
 
 func main() {
-	w, err := wal.Open("./path/to/wal", chain.DefaultMaxSegmentSize, true, nil)
+	w, err := wal.Open("./path/to/wal", 0, 0, nil)
 	if err != nil {
 		// handle error
 		panic(err)
 	}
 	defer w.Close()
 
-	foo := wal.CreateEntry([]byte("my_key"), []byte("my_data"))
+	foo := wal.CreateRecord(1337, []byte("my_data"))
 
-	if err := w.Write(foo); err != nil {
+	seqNum, err := w.Write(foo)
+	if err != nil {
 		// handle write error
 		panic(err)
 	}
-	fmt.Printf("successful wrote entry. Sequence Number: %d Version: %d \n", foo.SequenceNumber(), foo.Version())
+	fmt.Printf("successful wrote record. Sequence Number: %d Version: %d \n", seqNum, foo.Version())
 
-	bar := wal.record{}
-	if err := w.ReadByKey([]byte("my_key"), false, &bar); err != nil {
+	bar := wal.CreateRecord(0, nil)
+	if err := w.ReadKey(bar, 1337); err != nil {
 		// handle error
 		panic(err)
 	}
 
-	fmt.Printf("successful read entry from log with key: %s and value: %s \n", bar.Key, bar.Data)
+	fmt.Printf("successful read entry from log with key: %s and value: %s \n", bar.Key(), bar.Data())
 }

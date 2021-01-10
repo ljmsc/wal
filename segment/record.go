@@ -6,8 +6,6 @@ import (
 	"fmt"
 )
 
-// [Record [Record Header [Data Size 8][Key Hash 8]][Record Data ~]]...
-
 const (
 	headerKeyHashFieldLength = 8
 )

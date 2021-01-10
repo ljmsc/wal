@@ -6,9 +6,6 @@ import (
 	"os"
 )
 
-// Segment File format
-// [Record [Record Header [Data Size 8][Key 8]][Record Data ~]]...
-
 // Segment .
 type Segment interface {
 	Name() string
