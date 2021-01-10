@@ -134,7 +134,7 @@ func TestCompareAndWriteHappy(t *testing.T) {
 		key:  uint64(5),
 		data: []byte("test data"),
 	}
-	_, err := w.CompareAndWrite(&r, 3)
+	_, err := w.CompareWrite(&r, 3)
 	is.NoErr(err)
 }
 
@@ -148,7 +148,7 @@ func TestCompareAndWriteOutdatedVersion(t *testing.T) {
 		data: []byte("test data"),
 	}
 
-	_, err := w.CompareAndWrite(&r, 2)
+	_, err := w.CompareWrite(&r, 2)
 	if err == nil {
 		is.Fail()
 	}
@@ -165,7 +165,7 @@ func TestCompareAndWriteInvalidVersion(t *testing.T) {
 		data: []byte("test data"),
 	}
 
-	_, err := w.CompareAndWrite(&r, 10)
+	_, err := w.CompareWrite(&r, 10)
 	if err == nil {
 		is.Fail()
 	}

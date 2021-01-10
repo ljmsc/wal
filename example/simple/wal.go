@@ -29,5 +29,5 @@ func main() {
 		panic(err)
 	}
 
-	fmt.Printf("successful read entry from log with key: %s and value: %s \n", bar.Key(), bar.Data())
+	fmt.Printf("successful read entry from log with key: %d and value: %d \n", bar.Key(), bar.Data())
 }

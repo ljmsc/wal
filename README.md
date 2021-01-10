@@ -11,64 +11,82 @@ go get -u github.com/ljmsc/wal
 ```
 
 ## Usage
+> **Note:** since version 0.7.0 the wal is no longer safe for concurrent write.
+> It is up to the developer to protect the wal. e.g. Mutex, Channels.
+> Since this kind of functionality is not always needed I removed it for performance's sake.
 
 ### basic
 ```go
-storage, err := wal.Open("./path/to/wal", bucket.DefaultMaxPouchSize, true, nil)
-if err != nil {
-    // handle error
-    panic(err)
+package main
+
+import (
+	"fmt"
+
+	"github.com/ljmsc/wal/wal"
+)
+
+func main() {
+	storage, err := wal.Open("./path/to/wal", 0, 0, nil)
+	if err != nil {
+		// handle error
+		panic(err)
+	}
+	defer storage.Close()
+
+	foo := wal.CreateRecord(1337, []byte("my_data"))
+
+	seqNum, err := storage.Write(foo)
+	if err != nil {
+		// handle write error
+		panic(err)
+	}
+	fmt.Printf("successful wrote record. Sequence Number: %d Version: %d \n", seqNum, foo.Version())
+
+	bar := wal.CreateRecord(0, nil)
+	if err := storage.ReadKey(bar, 1337); err != nil {
+		// handle error
+		panic(err)
+	}
+
+	fmt.Printf("successful read entry from log with key: %s and value: %s \n", bar.Key(), bar.Data())
 }
-defer storage.Close()
-
-foo := storage.CreateEntry([]byte("my_key"), []byte("my_data"))
-
-if err := storage.Write(foo); err != nil {
-    // handle write error
-    panic(err)
-}
-fmt.Printf("successful wrote entry. Sequence Number: %d Version: %d \n", foo.SequenceNumber(), foo.Version())
-
-bar := wal.Entry{}
-if err := storage.ReadByKey([]byte("my_key"), false, &bar); err != nil {
-    // handle error
-    panic(err)
-}
-
-fmt.Printf("successful read entry from log with key: %s and value: %s \n", bar.Key, bar.Data)
 ```
 
 ### read options
-read the latest entry for a given `key` with `ReadByKey()`
+read the record for a given sequence number with `ReadAt()`
 ```go
-err := storage.ReadByKey([]byte("my key"), false, &entry)
+sequenceNum := uint64(42)
+...
+err := storage.ReadAt(&record, sequenceNum)
 ```
 
-read the entry for a given sequence number with `ReadBySequenceNumber()`
+read the latest record for a given `key` with `ReadKey()`
 ```go
-err := storage.ReadBySequenceNumber(sequenceNum, false, &entry)
+key := uint64(1337)
+...
+err := storage.ReadKey(&record, key)
 ```
 
-read the entry for a given `key` and version with `ReadByKeyAndVersion()`
+read a defined version of a record with `ReadVersion()`
 ```go
-err := storage.ReadByKeyAndVersion([]byte("my key"), 2, false, &entry)
+version := uint64(2)
+...
+err := storage.ReadVersion( &record, version)
 ```
 
 ### write options
 
-write entry
+write record
 ```go
-err := storage.Write(&entry)
+seqNum, err := storage.Write(&record)
 ```
 
-write entry to disk only if `version` is equal to current version on disk
+write record only if `version` is equal to current version on disk
 ```go
-err := storage.CompareAndWrite(version, &entry)
+version := uint64(2)
+...
+err := storage.CompareWrite(&record, version)
 ```
 
-### remove log from disk
-`Remove()` will remove all files of the log
-```go
-err := storage.Remove()
-```
-
+## License
+The project (and all code) is licensed under the Mozilla Public License Version 2.0.

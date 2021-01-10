@@ -19,7 +19,7 @@ type Wal interface {
 	ReadVersion(_record Record, _key uint64, _version uint64) error
 	// Write writes the given record on disc and returns the sequence number
 	Write(_record Record) (uint64, error)
-	CompareAndWrite(_record Record, _version uint64) (uint64, error)
+	CompareWrite(_record Record, _version uint64) (uint64, error)
 	// Truncate dumps all records whose sequence number is greater or equal to offset
 	Truncate(_seqNum uint64) error
 	// Length returns the amount of records in the write ahead log
@@ -183,7 +183,7 @@ func (w *wal) Write(_record Record) (uint64, error) {
 // if version > latest version => invalid version number
 // if version < latest version => version is to old, there is a newer version in the wal
 // if version == latest version => the given entry is written to the log
-func (w *wal) CompareAndWrite(_record Record, _version uint64) (uint64, error) {
+func (w *wal) CompareWrite(_record Record, _version uint64) (uint64, error) {
 	if w.IsClosed() {
 		return 0, ClosedErr
 	}
