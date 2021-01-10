@@ -5,8 +5,7 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
+	"github.com/matryer/is"
 )
 
 var testDir = "../tmp/segment/"
@@ -23,14 +22,21 @@ func cleanup(dir string) {
 	}
 }
 
+func createRecord(_key uint64, _payload []byte) Record {
+	r := record{
+		key:  _key,
+		data: _payload,
+	}
+	return &r
+}
+
 func fillSegment(p Segment, amount int, writeSuffix string) []int64 {
 	offsets := make([]int64, 0, amount)
 	for i := 0; i < amount; i++ {
-		testKey := []byte("test_key_" + strconv.Itoa(i))
+		testKey := uint64(i + 1)
 		testData := []byte("test_data_" + strconv.Itoa(i) + writeSuffix)
-		testRecord := CreateRecord(testKey, testData)
-
-		offset, err := p.WriteRecord(testRecord)
+		testRecord := createRecord(testKey, testData)
+		offset, err := p.Write(testRecord)
 		if err != nil {
 			panic(err)
 		}
@@ -42,7 +48,7 @@ func fillSegment(p Segment, amount int, writeSuffix string) []int64 {
 func createTestSegment(name string, dir string) Segment {
 	prepare(testDir)
 	defer cleanup(testDir)
-	seg, err := Open(dir + name)
+	seg, err := Open(dir+name, nil)
 	if err != nil {
 		panic(err)
 	}
@@ -53,162 +59,147 @@ func createTestSegment(name string, dir string) Segment {
 }
 
 func TestOpenReadWrite(t *testing.T) {
+	is := is.New(t)
 	prepare(testDir)
 	defer cleanup(testDir)
-	seg, err := Open(testDir + "test_open_read_write")
-	require.NoError(t, err)
+	seg, err := Open(testDir+"test_open_read_write", nil)
+	is.NoErr(err)
 
 	for i := 0; i < 15; i++ {
-		testKey := []byte("test_key_" + strconv.Itoa(i))
+		testKey := uint64(i + 1)
 		testData := []byte("test_data_" + strconv.Itoa(i) + "WriteRecord")
-		testRecord := CreateRecord(testKey, testData)
+		testRecord := createRecord(testKey, testData)
 
-		_, err := seg.WriteRecord(testRecord)
-		require.NoError(t, err)
+		_, err := seg.Write(testRecord)
+		is.NoErr(err)
 	}
 
-	for i := 15; i < 20; i++ {
-		testKey := []byte("test_key_" + strconv.Itoa(i))
-		testData := []byte("test_data_" + strconv.Itoa(i) + "write")
+	size, err := seg.Size()
+	is.NoErr(err)
+	is.Equal(size, int64(575))
 
-		_, err := seg.Write(testKey, testData)
-		require.NoError(t, err)
-	}
-
-	_, err = seg.Size()
-	assert.NoError(t, err)
+	offsets := seg.Offsets()
+	is.Equal(len(offsets), 15)
 
 	closeErr := seg.Close()
-	require.NoError(t, closeErr)
+	is.NoErr(closeErr)
 
-	seg2, err := Open(testDir + "test_open_read_write")
-	require.NoError(t, err)
+	seg2, err := Open(testDir+"test_open_read_write", nil)
+	is.NoErr(err)
 
-	for i := 0; i < 20; i++ {
-		testKey := []byte("test_key_" + strconv.Itoa(i))
+	size, err = seg2.Size()
+	is.NoErr(err)
+	is.Equal(size, int64(575))
 
-		testReadRecord := Record{}
-		err := seg2.ReadByKey(testKey, true, &testReadRecord)
-		require.NoError(t, err)
-		assert.EqualValues(t, testKey, testReadRecord.Key)
+	offsets2 := seg2.Offsets()
+	is.Equal(len(offsets2), 15)
 
-		testReadRecord2 := Record{}
-		err2 := seg2.ReadByKey(testKey, false, &testReadRecord2)
-		if !assert.NoError(t, err2) {
-			return
-		}
-		assert.EqualValues(t, testKey, testReadRecord2.Key)
+	for i := 0; i < 15; i++ {
+		testKey := uint64(i + 1)
+		testData := []byte("test_data_" + strconv.Itoa(i) + "WriteRecord")
+		testReadRecord := record{}
+		err := seg2.ReadKey(&testReadRecord, testKey)
+		is.NoErr(err)
+		is.Equal(testKey, testReadRecord.Key())
+		is.Equal(len(testData), len(testReadRecord.data))
+		is.Equal(string(testData), string(testReadRecord.data))
 	}
 
 	for i := 15; i < 20; i++ {
-		testKey := []byte("test_key_" + strconv.Itoa(i))
+		testKey := uint64(i + 1)
 		testData := []byte("test_data_" + strconv.Itoa(i) + "write_new")
 
-		_, err := seg2.Write(testKey, testData)
-		require.NoError(t, err)
+		r := createRecord(testKey, testData)
+		_, err := seg2.Write(r)
+		is.NoErr(err)
 	}
 
-	/*
-		stream := seg2.StreamRecords(true)
-		for {
-			item, ok := <-stream
-			if !ok {
-				break
-			}
-			if !assert.NoError(t, item.Err) {
-				continue
-			}
-
-			if !strings.HasPrefix(string(item.Record.Key), "test_key_") {
-				t.Errorf("wrong record key: %s", string(item.Record.Key))
-			}
-		}
-
-
-	*/
 	closeErr = seg2.Close()
-	require.NoError(t, closeErr)
+	is.NoErr(closeErr)
 }
 
 func TestSnapshot(t *testing.T) {
+	is := is.New(t)
 	prepare(testDir)
 	defer cleanup(testDir)
 	name := testDir + "test_snapshot"
 	snapName := name + "_copy"
-	seg, err := Open(name)
-	require.NoError(t, err)
+	seg, err := Open(name, nil)
+	is.NoErr(err)
 	defer seg.Close()
 
 	fillSegment(seg, 15, "")
 
 	size, err := seg.Size()
-	assert.NoError(t, err)
+	is.NoErr(err)
 
-	err = seg.Snapshot(snapName)
-	require.NoError(t, err)
+	err = Snapshot(seg, snapName)
+	is.NoErr(err)
 
-	seg2, err := Open(snapName)
-	require.NoError(t, err)
+	seg2, err := Open(snapName, nil)
+	is.NoErr(err)
 	defer seg2.Close()
 
 	size2, err := seg2.Size()
-	assert.NoError(t, err)
+	is.NoErr(err)
 
-	assert.EqualValues(t, size, size2)
+	is.Equal(size, size2)
 }
 
 func TestRemove(t *testing.T) {
+	is := is.New(t)
 	prepare(testDir)
 	defer cleanup(testDir)
 	name := testDir + "test_remove"
-	seg, err := Open(name)
-	require.NoError(t, err)
+	seg, err := Open(name, nil)
+	is.NoErr(err)
 
 	fillSegment(seg, 15, "")
 
 	err = seg.Close()
-	assert.NoError(t, err)
+	is.NoErr(err)
 
-	err = seg.Remove()
-	require.NoError(t, err)
+	err = Remove(seg)
+	is.NoErr(err)
 }
 
 func TestTruncate(t *testing.T) {
+	is := is.New(t)
 	prepare(testDir)
 	defer cleanup(testDir)
 	// defer
 
 	name := testDir + "test_truncate"
-	seg, err := Open(name)
-	require.NoError(t, err)
+	seg, err := Open(name, nil)
+	is.NoErr(err)
 	defer seg.Close()
 
 	offsets := fillSegment(seg, 15, "")
-	assert.EqualValues(t, 15, len(offsets))
-
-	latestOffsets := seg.LastOffsets()
-	assert.EqualValues(t, 15, len(latestOffsets))
+	is.Equal(15, len(offsets))
 	offset9 := offsets[9]
 
-	latestOffset := seg.LastOffset()
-	assert.EqualValues(t, 750, latestOffset)
+	latestOffset := seg.Offset()
+	is.Equal(int64(382), latestOffset)
 
-	r := Record{}
-	err = seg.ReadByOffset(offset9, true, &r)
-	assert.NoError(t, err)
+	r := record{}
+	err = seg.ReadAt(&r, offset9)
+	is.NoErr(err)
 
 	err = seg.Truncate(offset9)
-	require.NoError(t, err, "can' truncate segment")
+	is.NoErr(err)
 
-	r2 := Record{}
-	err = seg.ReadByOffset(offset9, true, &r2)
-	assert.EqualError(t, err, InvalidRecordOffsetErr.Error())
+	r2 := record{}
+	err = seg.ReadAt(&r2, offset9)
+	if err == nil {
+		is.Fail()
+	}
+	is.Equal(err.Error(), RecordNotFoundErr.Error())
 
-	offset8 := seg.LastOffset()
-	r3 := Record{}
-	err = seg.ReadByOffset(offset8, true, &r3)
-	assert.NoError(t, err)
+	offset8 := seg.Offset()
+	r3 := record{}
+	err = seg.ReadAt(&r3, offset8)
+	is.NoErr(err)
 
-	latestOffsets = seg.LastOffsets()
-	assert.EqualValues(t, 9, len(latestOffsets))
+	offsets = seg.Offsets()
+	is.Equal(9, len(offsets))
 }

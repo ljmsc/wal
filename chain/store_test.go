@@ -1,46 +1,47 @@
-package bucket
+package chain
 
 import (
 	"testing"
 
-	"github.com/stretchr/testify/assert"
+	"github.com/matryer/is"
 )
 
 var storeTestDir = "../tmp/store/"
 
 func TestOpenStore(t *testing.T) {
+	is := is.New(t)
 	prepare(storeTestDir)
 	defer cleanup(storeTestDir)
 	store, err := openStore(storeTestDir + "test_open")
-	if !assert.NoError(t, err) {
-		return
-	}
-	if !assert.NotNil(t, store) {
-		return
-	}
+	is.NoErr(err)
+	is.True(store != nil)
 
 	err = store.close()
-	assert.NoError(t, err)
+	is.NoErr(err)
 }
 
 func TestUpdateAndGetStore(t *testing.T) {
+	is := is.New(t)
 	prepare(storeTestDir)
 	defer cleanup(storeTestDir)
 	testSegmentNames := []string{"segment1", "segment2", "segment3"}
 	store, err := openStore(storeTestDir + "test_update_get")
-	if !assert.NoError(t, err) {
-		return
-	}
-	if !assert.NotNil(t, store) {
-		return
-	}
+	is.NoErr(err)
+	is.True(store != nil)
 
 	err = store.update(testSegmentNames)
-	assert.NoError(t, err)
+	is.NoErr(err)
 
-	segmentNames := store.get()
-	assert.EqualValues(t, testSegmentNames, segmentNames)
+	is.Equal(uint64(3), store.length())
+
+	is.Equal(testSegmentNames, store.get())
 
 	err = store.close()
-	assert.NoError(t, err)
+	is.NoErr(err)
+
+	store2, err := openStore(storeTestDir + "test_update_get")
+	is.NoErr(err)
+	is.Equal(uint64(3), store2.length())
+
+	is.Equal(testSegmentNames, store2.get())
 }
