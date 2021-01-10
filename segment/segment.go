@@ -238,7 +238,7 @@ func (s *segment) Write(_record Record) (int64, error) {
 		return 0, fmt.Errorf("can't sync file changes to disk: %w", err)
 	}
 
-	s.consider(offset, _record.Key())
+	s.consider(int64(offset), _record.Key())
 
 	return offset, nil
 }
@@ -360,8 +360,9 @@ func (s *segment) streamHeaderWithPadding(_padding uint64) <-chan HeaderEnvelope
 			}
 
 			stream <- HeaderEnvelope{
-				Offset: currOffset,
-				Header: h,
+				Offset:      currOffset,
+				Header:      h,
+				PaddingData: raw[headerLength:],
 			}
 
 			currOffset += headerPayloadSizeFieldLength + int64(h.PayloadSize)

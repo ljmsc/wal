@@ -1,4 +1,4 @@
-package chain
+package wal
 
 import "github.com/ljmsc/wal/segment"
 
@@ -14,12 +14,6 @@ type RecordEnvelope struct {
 type HeaderEnvelope struct {
 	Header      segment.Header
 	SeqNum      uint64
+	Version     uint64
 	PaddingData []byte
-}
-
-// Position .
-type Position struct {
-	Key     uint64
-	Offset  int64
-	Segment segment.Segment
 }

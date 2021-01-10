@@ -5,12 +5,18 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/stretchr/testify/assert"
-
-	"github.com/stretchr/testify/require"
+	"github.com/matryer/is"
 )
 
 var walTestDir = "../tmp/wal/"
+
+func TestMain(m *testing.M) {
+	os.Exit(func() int {
+		defer cleanup(walTestDir)
+		prepare(walTestDir)
+		return m.Run()
+	}())
+}
 
 func prepare(dir string) {
 	if err := os.MkdirAll(dir, 0700); err != nil {
@@ -24,213 +30,207 @@ func cleanup(dir string) {
 	}
 }
 
-func createTestLog(name string, dir string) Wal {
-	b, err := Open(dir+name, 500, true, nil)
+func createTestWal(name string) Wal {
+	w, err := Open(walTestDir+name, 0, 0, nil)
 	if err != nil {
 		panic(err)
 	}
-	if b == nil {
-		panic("wal " + name + " is nil")
-	}
-	return b
+	return w
 }
 
-func createTestLogWithData(name string, dir string, loops int) Wal {
-	w := createTestLog(name, dir)
-	for i := 1; i <= loops; i++ {
-		eKey := []byte("key_" + strconv.Itoa(i))
-		eData := []byte("data_" + strconv.Itoa(i))
-		entry := CreateEntry(eKey, eData)
-		if err := w.Write(entry); err != nil {
-			panic(err)
+func createTestWalPreFilled(name string, loops int, versions int) Wal {
+	w := createTestWal(name)
+	for i := 1; i <= versions; i++ {
+		for j := 1; j <= loops; j++ {
+			r := record{
+				key:  uint64(j),
+				data: []byte("test data key: " + strconv.Itoa(j) + " version: " + strconv.Itoa(i)),
+			}
+			if _, err := w.Write(&r); err != nil {
+				panic(err)
+			}
 		}
 	}
 	return w
 }
 
-func TestOpenWithHandler(t *testing.T) {
-	prepare(walTestDir)
-	defer cleanup(walTestDir)
-
-	w, err := OpenWithHandler(walTestDir+"test_open", true, nil)
-	require.NoError(t, err)
-	require.NotNil(t, w)
-	err = w.Close()
-	assert.NoError(t, err)
+func TestOpen(t *testing.T) {
+	is := is.New(t)
+	w, err := Open(walTestDir+"open_test", 0, 0, nil)
+	is.NoErr(err)
+	defer w.Close()
 }
 
-func TestWalReadWrite(t *testing.T) {
-	prepare(walTestDir)
-	defer cleanup(walTestDir)
-
-	w := createTestLog("test_read_write", walTestDir)
+func TestWalWrite(t *testing.T) {
+	is := is.New(t)
+	l := 50
+	w := createTestWal("write_test")
 	defer w.Close()
-
-	for i := 1; i <= 100; i++ {
-		eKey := []byte("key_" + strconv.Itoa(i))
-		eData := []byte("data_" + strconv.Itoa(i))
-		entry := CreateEntry(eKey, eData)
-		err := w.Write(entry)
-		assert.NoError(t, err)
-	}
-
-	for i := 1; i <= 100; i++ {
-		eKey := []byte("key_" + strconv.Itoa(i))
-		entry := Entry{}
-		err := w.ReadBySequenceNumber(uint64(i), true, &entry)
-		assert.NoError(t, err)
-		assert.EqualValues(t, eKey, entry.Key)
-		assert.EqualValues(t, 1, entry.Version())
-
-		entry2 := Entry{}
-		err = w.ReadByKey(eKey, true, &entry2)
-		assert.NoError(t, err)
-		assert.EqualValues(t, eKey, entry2.Key)
-		assert.EqualValues(t, 1, entry2.Version())
-	}
-}
-
-func TestWalReadVersion(t *testing.T) {
-	prepare(walTestDir)
-	defer cleanup(walTestDir)
-	w := createTestLogWithData("test_versions", walTestDir, 10)
-	defer w.Close()
-
-	for i := 1; i <= 5; i++ {
-		eKey := []byte("key_" + strconv.Itoa(i))
-		eData := []byte("data_" + strconv.Itoa(i))
-		entry := CreateEntry(eKey, eData)
-		err := w.Write(entry)
-		assert.NoError(t, err)
-	}
-
-	for i := 1; i <= 5; i++ {
-		eKey := []byte("key_" + strconv.Itoa(i))
-		entry := Entry{}
-		err := w.ReadByKeyAndVersion(eKey, 2, true, &entry)
-		assert.NoError(t, err)
-		assert.EqualValues(t, eKey, entry.Key)
-		assert.EqualValues(t, 2, entry.Version())
-	}
-
-	eKey := []byte("key_not_exist")
-	entry := Entry{}
-	err := w.ReadByKeyAndVersion(eKey, 1, true, &entry)
-	assert.Error(t, err)
-}
-
-func TestWalStreamEntries(t *testing.T) {
-	prepare(walTestDir)
-	defer cleanup(walTestDir)
-	w := createTestLogWithData("test_versions", walTestDir, 25)
-	defer w.Close()
-
-	stream := w.StreamEntries(1, 0, true)
-	count := 0
-	for {
-		item, ok := <-stream
-		if !ok {
-			break
+	for i := 0; i < l; i++ {
+		r := record{
+			key:  uint64(i + 1),
+			data: []byte("test data " + strconv.Itoa(i+1)),
 		}
-		assert.NoError(t, item.Err)
-		count++
+		seqNum, err := w.Write(&r)
+		is.NoErr(err)
+		is.Equal(seqNum, uint64(i+1))
 	}
-	assert.EqualValues(t, 25, count)
 }
 
-func TestWalCompressWithFilter(t *testing.T) {
-	prepare(walTestDir)
-	defer cleanup(walTestDir)
-	w := createTestLogWithData("test_compression", walTestDir, 20)
+func TestWalRead(t *testing.T) {
+	t.Parallel()
+	is := is.New(t)
+	l := 10
+	w := createTestWalPreFilled("read_test", l, 2)
 	defer w.Close()
-
-	preComSize, err := w.Size()
-	assert.NoError(t, err)
-
-	err = w.CompressWithFilter(func(item *Entry) bool {
-		if item.SequenceNumber()%2 == 0 {
-			return true
-		}
-		return false
-	})
-	assert.NoError(t, err)
-
-	postComSize, err := w.Size()
-	assert.NoError(t, err)
-	assert.LessOrEqual(t, postComSize, preComSize)
-
-	stream := w.StreamEntries(1, 0, true)
-	for {
-		item, ok := <-stream
-		if !ok {
-			break
-		}
-		assert.NoError(t, item.Err)
+	for i := 1; i <= l; i++ {
+		testKey := uint64(i)
+		testData := []byte("test data key: " + strconv.Itoa(i) + " version: 2")
+		r := record{}
+		err := w.ReadKey(&r, testKey)
+		is.NoErr(err)
+		is.Equal(r.key, testKey)
+		is.Equal(r.seqNum, uint64(i+l))
+		is.Equal(r.version, uint64(2))
+		is.Equal(len(r.data), len(testData))
+		is.Equal(string(r.data), string(testData))
 	}
 }
 
-func TestWalReopen(t *testing.T) {
-	prepare(walTestDir)
-	defer cleanup(walTestDir)
-
-	w := createTestLog("test_read_write_reopen", walTestDir)
-
-	for i := 1; i <= 10; i++ {
-		eKey := []byte("key_" + strconv.Itoa(i))
-		eData := []byte("data_" + strconv.Itoa(i))
-		entry := CreateEntry(eKey, eData)
-		err := w.Write(entry)
-		assert.NoError(t, err)
+func TestReadVersion(t *testing.T) {
+	t.Parallel()
+	is := is.New(t)
+	l := 10
+	w := createTestWalPreFilled("read_version_test", l, 3)
+	defer w.Close()
+	for i := 1; i <= l; i++ {
+		testKey := uint64(i)
+		testData := []byte("test data key: " + strconv.Itoa(i) + " version: 2")
+		r := record{}
+		err := w.ReadVersion(&r, testKey, 2)
+		is.NoErr(err)
+		is.Equal(r.key, testKey)
+		is.Equal(r.version, uint64(2))
+		is.Equal(len(r.data), len(testData))
+		is.Equal(string(r.data), string(testData))
 	}
+}
+
+func TestVersion(t *testing.T) {
+	t.Parallel()
+	is := is.New(t)
+	w := createTestWalPreFilled("version_test", 10, 3)
+	defer w.Close()
+	version := Version(w, 5)
+	is.Equal(version, uint64(3))
+}
+
+func TestCompareAndWriteHappy(t *testing.T) {
+	t.Parallel()
+	is := is.New(t)
+	w := createTestWalPreFilled("compare_write_test_happy", 10, 3)
+	defer w.Close()
+	r := record{
+		key:  uint64(5),
+		data: []byte("test data"),
+	}
+	_, err := w.CompareAndWrite(&r, 3)
+	is.NoErr(err)
+}
+
+func TestCompareAndWriteOutdatedVersion(t *testing.T) {
+	t.Parallel()
+	is := is.New(t)
+	w := createTestWalPreFilled("compare_write_test_outdated", 10, 3)
+	defer w.Close()
+	r := record{
+		key:  uint64(5),
+		data: []byte("test data"),
+	}
+
+	_, err := w.CompareAndWrite(&r, 2)
+	if err == nil {
+		is.Fail()
+	}
+	is.Equal(err.Error(), RecordOutdatedErr.Error())
+}
+
+func TestCompareAndWriteInvalidVersion(t *testing.T) {
+	t.Parallel()
+	is := is.New(t)
+	w := createTestWalPreFilled("compare_write_test_invalid", 10, 3)
+	defer w.Close()
+	r := record{
+		key:  uint64(5),
+		data: []byte("test data"),
+	}
+
+	_, err := w.CompareAndWrite(&r, 10)
+	if err == nil {
+		is.Fail()
+	}
+	is.Equal(err.Error(), "invalid version")
+}
+
+func TestLength(t *testing.T) {
+	t.Parallel()
+	is := is.New(t)
+	w := createTestWalPreFilled("length_test", 10, 3)
+	defer w.Close()
+	l := w.Length()
+	is.Equal(l, uint64(30))
+}
+
+func TestFirstSeqNum(t *testing.T) {
+	t.Parallel()
+	is := is.New(t)
+	w := createTestWalPreFilled("seqnum_test", 10, 3)
+	defer w.Close()
+	fs := w.FirstSeqNum()
+	is.Equal(fs, uint64(1))
+
+	ls := w.SeqNum()
+	is.Equal(ls, uint64(30))
+}
+
+func TestKeySeqNums(t *testing.T) {
+	t.Parallel()
+	is := is.New(t)
+	w := createTestWalPreFilled("keyseqnum_test", 10, 3)
+	defer w.Close()
+	ksn := w.KeySeqNums()
+
+	is.Equal(len(ksn), 10)
+	for key := uint64(1); key <= 10; key++ {
+		if _, ok := ksn[key]; !ok {
+			is.Fail()
+		}
+		is.Equal(len(ksn[key]), 3)
+	}
+}
+
+func TestKeyVersionSeqNum(t *testing.T) {
+	t.Parallel()
+	is := is.New(t)
+	w := createTestWalPreFilled("keyversionseqnum_test", 10, 3)
+	defer w.Close()
+	kvs := w.KeySeqNums()
+
+	is.Equal(len(kvs), 10)
+	for key := uint64(1); key <= 10; key++ {
+		if _, ok := kvs[key]; !ok {
+			is.Fail()
+		}
+		is.Equal(len(kvs[key]), 3)
+	}
+}
+
+func TestIsClosed(t *testing.T) {
+	t.Parallel()
+	is := is.New(t)
+	w := createTestWalPreFilled("closed_test", 10, 3)
 	err := w.Close()
-	require.NoError(t, err, "can't close wal")
+	is.NoErr(err)
 
-	w2, err := Open(walTestDir+"test_read_write_reopen", 500, true, nil)
-	require.NoError(t, err, "can't reopen wal")
-
-	eKey := []byte("key_1")
-	eData := []byte("data_1")
-	we := CreateEntry(eKey, eData)
-
-	err = w2.Write(we)
-	assert.NoError(t, err)
-
-	re := Entry{}
-	err = w2.ReadBySequenceNumber(11, true, &re)
-	assert.NoError(t, err)
-	assert.EqualValues(t, uint64(2), re.Version())
-
-}
-
-func TestDumpWal(t *testing.T) {
-	prepare(walTestDir)
-	defer cleanup(walTestDir)
-
-	w := createTestLog("test_read_write_reopen", walTestDir)
-	defer w.Close()
-
-	for i := 1; i <= 10; i++ {
-		eKey := []byte("key_" + strconv.Itoa(i))
-		eData := []byte("data_" + strconv.Itoa(i))
-		entry := CreateEntry(eKey, eData)
-		err := w.Write(entry)
-		assert.NoError(t, err)
-	}
-
-	seqNumbers := w.LatestSequenceNumbers()
-	assert.EqualValues(t, 10, len(seqNumbers))
-
-	e := Entry{}
-	err := w.ReadBySequenceNumber(seqNumbers[5], true, &e)
-	assert.NoError(t, err)
-
-	err = w.Dump(seqNumbers[5])
-	assert.NoError(t, err)
-
-	e2 := Entry{}
-	err = w.ReadBySequenceNumber(seqNumbers[5], true, &e2)
-	assert.EqualError(t, err, EntryNotFoundErr.Error())
-
-	seqNumbers2 := w.LatestSequenceNumbers()
-	assert.EqualValues(t, 5, len(seqNumbers2))
+	is.True(w.IsClosed())
 }

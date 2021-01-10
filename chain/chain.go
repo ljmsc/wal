@@ -42,6 +42,9 @@ func Keys(_chain Chain) []uint64 {
 // if _startSeqNum is zero it starts with the first possible record
 // if _endSeqNum is zero it sends all possible records in the chain
 func Stream(_chain Chain, _startSeqNum uint64, _endSeqNum uint64) <-chan RecordEnvelope {
+	if _chain.IsClosed() {
+		return nil
+	}
 	stream := make(chan RecordEnvelope)
 	if _startSeqNum == 0 {
 		_startSeqNum = _chain.FirstSeqNum()
@@ -72,7 +75,7 @@ type chain struct {
 	// name is the name if the segment chain. This is a filepath
 	name string
 	// maxSegmentSize defines the max size of the segment files in the chain in bytes
-	maxSegmentSize int64
+	maxSegmentSize uint64
 	// store is a list of all segments in the segment chain
 	store *store
 	// firstSeqNum is the first sequence number in the chain. this changes during compression
@@ -90,7 +93,7 @@ type chain struct {
 }
 
 // Open .
-func Open(name string, _padding uint64, maxSegmentSize int64, handler func(_chain Chain, _envelope HeaderEnvelope) error) (Chain, error) {
+func Open(name string, _padding uint64, maxSegmentSize uint64, handler func(_chain Chain, _envelope HeaderEnvelope) error) (Chain, error) {
 	if maxSegmentSize == 0 {
 		maxSegmentSize = defaultMaxSegmentSize
 	}
@@ -119,11 +122,11 @@ func Open(name string, _padding uint64, maxSegmentSize int64, handler func(_chai
 
 	for _, segmentName := range segmentNames {
 		seg, err := segment.OpenWithPadding(segmentName, _padding, func(_segment segment.Segment, _envelope segment.HeaderEnvelope) error {
-			seqNum, err := decodeSeqNum(_envelope.Header.PaddingBytes[:headerSequenceNumberFieldLength])
+			seqNum, err := decodeSeqNum(_envelope.PaddingData[:headerSequenceNumberFieldLength])
 			if err != nil {
 				return err
 			}
-			c.consider(_envelope.Header.Key, seqNum, _envelope.Offset, _segment)
+			c.consider(_envelope.Offset, _envelope.Header.Key, seqNum, _segment)
 			if c.firstSeqNum == 0 || c.firstSeqNum > seqNum {
 				c.firstSeqNum = seqNum
 			}
@@ -134,8 +137,9 @@ func Open(name string, _padding uint64, maxSegmentSize int64, handler func(_chai
 
 			if handler != nil {
 				if err := handler(&c, HeaderEnvelope{
-					SeqNum: seqNum,
-					Header: _envelope.Header,
+					SeqNum:      seqNum,
+					Header:      _envelope.Header,
+					PaddingData: _envelope.PaddingData[headerSequenceNumberFieldLength:],
 				}); err != nil {
 					return err
 				}
@@ -208,7 +212,7 @@ func (c *chain) Write(_record Record) (uint64, error) {
 		c.firstSeqNum = newSeqNum
 	}
 	c.seqNum = newSeqNum
-	c.consider(_record.Key(), newSeqNum, offset, _segment)
+	c.consider(offset, _record.Key(), newSeqNum, _segment)
 
 	return newSeqNum, nil
 }
@@ -347,7 +351,7 @@ func (c *chain) segmentName(startSeqNum uint64) string {
 	return c.name + "_" + strconv.FormatUint(startSeqNum, 10)
 }
 
-func (c *chain) consider(_key uint64, _seqNum uint64, _offset int64, _segment segment.Segment) {
+func (c *chain) consider(_offset int64, _key uint64, _seqNum uint64, _segment segment.Segment) {
 	if _, ok := c.keySeqNums[_key]; !ok {
 		c.keySeqNums[_key] = []uint64{}
 	}
@@ -376,7 +380,7 @@ func (c *chain) segment() (segment.Segment, error) {
 		return nil, err
 	}
 
-	if size > c.maxSegmentSize {
+	if uint64(size) > c.maxSegmentSize {
 		var err error
 		_segment, err = c.addSegment()
 		if err != nil {

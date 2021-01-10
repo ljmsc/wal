@@ -1,369 +1,257 @@
 package wal
 
 import (
-	"errors"
 	"fmt"
-	"sync"
 
-	"github.com/ljmsc/wal/bucket"
 	"github.com/ljmsc/wal/segment"
+
+	"github.com/ljmsc/wal/chain"
 )
 
 type Wal interface {
-	Write(e *Entry) error
-	WriteBytes(key segment.Key, data []byte) error
-	CompareAndWrite(version uint64, e *Entry) error
-	CompareAndWriteBytes(version uint64, key segment.Key, data []byte) error
-	ReadByKey(key segment.Key, headOnly bool, e *Entry) error
-	ReadBySequenceNumber(seqNum uint64, headOnly bool, e *Entry) error
-	ReadByKeyAndVersion(key segment.Key, version uint64, headOnly bool, e *Entry) error
-	Dump(_dumpSeqNum uint64) error
-	StreamEntries(startSeqNum uint64, endSeqNum uint64, headOnly bool) <-chan Envelope
-	LatestSequenceNumber() uint64
-	LatestSequenceNumbers() []uint64
-	StreamLatestEntries(headOnly bool) <-chan Envelope
-	Compress() error
-	CompressWithFilter(filter func(item *Entry) bool) error
-	Close() error
-	Remove() error
-	IsClosed() bool
+	// Name returns the name of the write ahead log
+	Name() string
+	// ReadAt reads the data of record with the given sequence number
+	ReadAt(_record Record, _seqNum uint64) error
+	// ReadKey reads the latest record with the given key
+	ReadKey(_record Record, _key uint64) error
+	// ReadKey reads the record with the given key and version
+	ReadVersion(_record Record, _key uint64, _version uint64) error
+	// Write writes the given record on disc and returns the sequence number
+	Write(_record Record) (uint64, error)
+	CompareAndWrite(_record Record, _version uint64) (uint64, error)
+	// Truncate dumps all records whose sequence number is greater or equal to offset
+	Truncate(_seqNum uint64) error
+	// Length returns the amount of records in the write ahead log
+	Length() uint64
 	Size() (int64, error)
+	FirstSeqNum() uint64
+	SeqNum() uint64
+	KeySeqNums() map[uint64][]uint64
+	KeyVersionSeqNum() map[uint64]map[uint64]uint64
+	IsClosed() bool
+	Close() error
 }
 
-// writeAheadLog is a write ahead log
-type writeAheadLog struct {
-	// bucket is the file storage for the write ahead log
-	bucket bucket.Bucket
-	// latestVersions stores for all key hashes the latest version of the entry
-	latestVersions map[uint64]uint64
-	// keyVersionSeqNumbers maps for a given hash key all existing versions to there sequence number in the bucket
-	keyVersionSeqNumbers map[uint64]map[uint64]uint64
-	// dataMutex is a mutex to protect the data structures in the log
-	dataMutex sync.RWMutex
-	// closed
-	closed bool
-}
-
-// OpenWithHandler .
-func OpenWithHandler(name string, headOnly bool, handler func(e Entry) error) (Wal, error) {
-	return Open(name, 0, headOnly, handler)
-}
-
-// Open opens a new or existing wal
-func Open(name string, maxFileSize uint64, headOnly bool, handler func(e Entry) error) (Wal, error) {
-	w := writeAheadLog{
-		latestVersions:       make(map[uint64]uint64),
-		keyVersionSeqNumbers: make(map[uint64]map[uint64]uint64),
-		dataMutex:            sync.RWMutex{},
-		closed:               false,
+// Version returns the latest version number of the key.
+// returns 0 when key does not exist
+func Version(_wal Wal, _key uint64) uint64 {
+	keyVersions := _wal.KeyVersionSeqNum()
+	if _, ok := keyVersions[_key]; !ok {
+		return 0
 	}
-	b, err := bucket.Open(name, maxFileSize, headOnly, func(r bucket.Record) error {
-		entry := Entry{}
-		if err := recordToEntry(r, &entry); err != nil {
-			return ConvertErr{Err: err}
+	latestVersion := uint64(0)
+	for version := range keyVersions[_key] {
+		if version > latestVersion {
+			latestVersion = version
 		}
-		if err := entry.Validate(); err != nil {
-			return EntryNotValidErr{Err: err}
-		}
-		if handler != nil {
-			if err := handler(entry); err != nil {
-				return fmt.Errorf("can't execute handler for entry: %w", err)
-			}
-		}
+	}
+	return latestVersion
+}
 
-		w.latestVersions[entry.Key.Hash()] = entry.Version()
-		if _, ok := w.keyVersionSeqNumbers[entry.Key.Hash()]; !ok {
-			w.keyVersionSeqNumbers[entry.Key.Hash()] = make(map[uint64]uint64)
-		}
-		w.keyVersionSeqNumbers[entry.Key.Hash()][entry.Version()] = entry.SequenceNumber()
+// Stream returns a channel which receives all records for the given sequence number range.
+// if the wal is closed the function returns nil
+// if _startSeqNum is zero it starts with the first possible record
+// if _endSeqNum is zero it sends all possible records in the chain
+func Stream(_wal Wal, _startSeqNum uint64, _endSeqNum uint64) <-chan RecordEnvelope {
+	if _wal.IsClosed() {
 		return nil
-	})
-	if err != nil {
-		return nil, fmt.Errorf("can't open bucket files for log: %w", err)
 	}
-	w.bucket = b
-
-	return &w, nil
-}
-
-func convertRecordStream(recordStream <-chan bucket.Envelope) <-chan Envelope {
-	stream := make(chan Envelope)
+	stream := make(chan RecordEnvelope)
+	if _startSeqNum == 0 {
+		_startSeqNum = _wal.FirstSeqNum()
+		_endSeqNum = _wal.SeqNum()
+	}
 	go func() {
-		for {
-			env, ok := <-recordStream
-			if !ok {
-				break
+		defer close(stream)
+		for seqNum := _startSeqNum; seqNum <= _endSeqNum; seqNum++ {
+			r := record{}
+			if err := _wal.ReadAt(&r, seqNum); err != nil {
+				stream <- RecordEnvelope{
+					SeqNum: seqNum,
+					Err:    err,
+				}
+				return
 			}
-			if env.Err != nil {
-				stream <- Envelope{Err: env.Err}
-				continue
+			stream <- RecordEnvelope{
+				SeqNum: seqNum,
+				Record: &r,
 			}
-			e := Entry{}
-			if err := recordToEntry(*env.Record, &e); err != nil {
-				stream <- Envelope{Err: ConvertErr{Err: err}}
-				continue
-			}
-			stream <- Envelope{Entry: &e}
 		}
-		close(stream)
 	}()
 	return stream
 }
 
-// Write writes a log entry to the write ahead log
-func (w *writeAheadLog) Write(e *Entry) error {
-	w.dataMutex.RLock()
-	defer w.dataMutex.RUnlock()
-	if w.closed {
-		return ClosedErr
-	}
-
-	// remove the read lock to lock for write
-	w.dataMutex.RUnlock()
-	// add read lock to satisfy RUnlock from above
-	defer w.dataMutex.RLock()
-
-	w.dataMutex.Lock()
-	defer w.dataMutex.Unlock()
-
-	version := uint64(1)
-	if currentVersion, ok := w.latestVersions[e.Key.Hash()]; ok {
-		version = currentVersion + 1
-	}
-	setVersion(version, e)
-
-	if err := e.Validate(); err != nil {
-		return EntryNotValidErr{Err: err}
-	}
-
-	r := bucket.Record{}
-	e.toRecord(&r)
-
-	if err := w.bucket.WriteRecord(&r); err != nil {
-		if errors.Is(err, bucket.WriteErr{}) {
-			return WriteErr{err}
-		}
-		return err
-	}
-
-	w.latestVersions[e.Key.Hash()] = version
-	if version == 1 {
-		w.keyVersionSeqNumbers[e.Key.Hash()] = make(map[uint64]uint64)
-	}
-	w.keyVersionSeqNumbers[e.Key.Hash()][version] = r.SequenceNumber()
-	return nil
+// wal is a write ahead log
+type wal struct {
+	// chain is the file storage for the write ahead log
+	chain chain.Chain
+	// keyVersionSeqNum - for each key the versions and there corresponding sequence number
+	keyVersionSeqNum map[uint64]map[uint64]uint64
+	// closed
+	closed bool
 }
 
-// WriteBytes writes a byte slice to the write ahead log
-func (w *writeAheadLog) WriteBytes(key segment.Key, data []byte) error {
-	return w.Write(CreateEntry(key, data))
+// Open opens a new or existing wal
+func Open(name string, _padding uint64, maxFileSize uint64, handler func(_wal Wal, _envelope HeaderEnvelope) error) (Wal, error) {
+
+	// add version field length to padding to ensure version is always read
+	_padding += headerVersionFieldLength
+
+	w := wal{
+		keyVersionSeqNum: map[uint64]map[uint64]uint64{},
+		closed:           false,
+	}
+	c, err := chain.Open(name, _padding, maxFileSize, func(_chain chain.Chain, _envelope chain.HeaderEnvelope) error {
+		version, err := decodeVersion(_envelope.PaddingData[:headerVersionFieldLength])
+		if err != nil {
+			return err
+		}
+		w.consider(_envelope.Header.Key, _envelope.SeqNum, version)
+		if handler != nil {
+			h := HeaderEnvelope{
+				Header:      _envelope.Header,
+				SeqNum:      _envelope.SeqNum,
+				Version:     version,
+				PaddingData: _envelope.PaddingData[headerVersionFieldLength:],
+			}
+			if err := handler(&w, h); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	w.chain = c
+
+	return &w, nil
+}
+
+func (w *wal) Name() string {
+	return w.chain.Name()
+}
+
+func (w *wal) ReadAt(_record Record, _seqNum uint64) error {
+	if w.IsClosed() {
+		return ClosedErr
+	}
+	return w.chain.ReadAt(_record, _seqNum)
+}
+
+func (w *wal) ReadKey(_record Record, _key uint64) error {
+	if w.IsClosed() {
+		return ClosedErr
+	}
+	return w.chain.ReadKey(_record, _key)
+}
+
+func (w *wal) ReadVersion(_record Record, _key uint64, _version uint64) error {
+	if w.IsClosed() {
+		return ClosedErr
+	}
+	if _, ok := w.keyVersionSeqNum[_key]; !ok {
+		return segment.RecordNotFoundErr
+	}
+	if _, ok := w.keyVersionSeqNum[_version]; !ok {
+		return RecordVersionNotFoundErr
+	}
+	seqNum := w.keyVersionSeqNum[_key][_version]
+	return w.chain.ReadAt(_record, seqNum)
+}
+
+func (w *wal) Write(_record Record) (uint64, error) {
+	if w.IsClosed() {
+		return 0, ClosedErr
+	}
+
+	version := Version(w, _record.Key()) + 1
+	if _, ok := w.keyVersionSeqNum[_record.Key()][version]; ok {
+		return 0, fmt.Errorf("version already exists for this key")
+	}
+	_record.SetVersion(version)
+	seqNum, err := w.chain.Write(_record)
+	if err != nil {
+		return 0, err
+	}
+	w.consider(_record.Key(), seqNum, version)
+	return seqNum, nil
 }
 
 // CompareAndWrite checks the given version with the latest entry in the wal.
 // if version > latest version => invalid version number
 // if version < latest version => version is to old, there is a newer version in the wal
 // if version == latest version => the given entry is written to the log
-func (w *writeAheadLog) CompareAndWrite(version uint64, e *Entry) error {
-	w.dataMutex.RLock()
-	if _, ok := w.latestVersions[e.Key.Hash()]; !ok {
-		w.dataMutex.RUnlock()
-		return EntryNotFoundErr
+func (w *wal) CompareAndWrite(_record Record, _version uint64) (uint64, error) {
+	if w.IsClosed() {
+		return 0, ClosedErr
 	}
-	latestVersion := w.latestVersions[e.Key.Hash()]
-	w.dataMutex.RUnlock()
-	if version > latestVersion {
-		return InvalidVersionErr
+
+	version := Version(w, _record.Key())
+	if _version > version {
+		return 0, fmt.Errorf("invalid version")
+	} else if _version < version {
+		return 0, RecordOutdatedErr
 	}
-	if version < latestVersion {
-		return OldVersionErr
-	}
-	return w.Write(e)
+	return w.Write(_record)
 }
 
-// CompareAndWriteBytes .
-func (w *writeAheadLog) CompareAndWriteBytes(version uint64, key segment.Key, data []byte) error {
-	return w.CompareAndWrite(version, CreateEntry(key, data))
-}
-
-// ReadByKey reads the latest version of an entry by key
-func (w *writeAheadLog) ReadByKey(key segment.Key, headOnly bool, e *Entry) error {
-	w.dataMutex.RLock()
-	defer w.dataMutex.RUnlock()
-	if w.closed {
-		return ClosedErr
-	}
-	r := bucket.Record{}
-	if err := w.bucket.ReadByKey(key, headOnly, &r); err != nil {
-		if errors.Is(err, bucket.ReadErr{}) {
-			return ReadErr{err}
-		}
-		if errors.Is(err, bucket.RecordNotFoundErr) {
-			return EntryNotFoundErr
-		}
-		return err
-	}
-	if err := recordToEntry(r, e); err != nil {
-		return ConvertErr{err}
-	}
-	return nil
-}
-
-// ReadBySequenceNumber read an entry by the given sequence number
-func (w *writeAheadLog) ReadBySequenceNumber(seqNum uint64, headOnly bool, e *Entry) error {
-	w.dataMutex.RLock()
-	defer w.dataMutex.RUnlock()
-	if w.closed {
-		return ClosedErr
-	}
-	r := bucket.Record{}
-	if err := w.bucket.ReadBySequenceNumber(seqNum, headOnly, &r); err != nil {
-		if errors.Is(err, bucket.ReadErr{}) {
-			return ReadErr{err}
-		}
-		if errors.Is(err, bucket.RecordNotFoundErr) {
-			return EntryNotFoundErr
-		}
-		return err
-	}
-	if err := recordToEntry(r, e); err != nil {
-		return ConvertErr{err}
-	}
-	return nil
-}
-
-func (w *writeAheadLog) ReadByKeyAndVersion(key segment.Key, version uint64, headOnly bool, e *Entry) error {
-	w.dataMutex.RLock()
-	defer w.dataMutex.RUnlock()
-	if w.closed {
+func (w *wal) Truncate(_seqNum uint64) error {
+	if w.IsClosed() {
 		return ClosedErr
 	}
 
-	if _, ok := w.keyVersionSeqNumbers[key.Hash()]; !ok {
-		return EntryNotFoundErr
-	}
-
-	if _, ok := w.keyVersionSeqNumbers[key.Hash()][version]; !ok {
-		return EntryVersionNotFoundErr
-	}
-
-	seqNum := w.keyVersionSeqNumbers[key.Hash()][version]
-	r := bucket.Record{}
-	if err := w.bucket.ReadBySequenceNumber(seqNum, headOnly, &r); err != nil {
-		if errors.Is(err, bucket.ReadErr{}) {
-			return ReadErr{err}
-		}
-		if errors.Is(err, bucket.RecordNotFoundErr) {
-			return EntryNotFoundErr
-		}
-		return err
-	}
-	if err := recordToEntry(r, e); err != nil {
-		return ConvertErr{err}
-	}
-
-	return nil
-}
-
-// Dump - removes all entries whose sequence number is greater or equal to seqNum. the removal is permanently.
-// If want to delete an entry in the wal use Write() with an empty value and compress the wal.
-func (w *writeAheadLog) Dump(_dumpSeqNum uint64) error {
-	w.dataMutex.Lock()
-	defer w.dataMutex.Unlock()
-
-	if err := w.bucket.Dump(_dumpSeqNum); err != nil {
-		return fmt.Errorf("can't dump wal: %w", err)
-	}
-
-	newLatestKeyVersion := make(map[uint64]uint64)
-	for keyHash, versionSeqNum := range w.keyVersionSeqNumbers {
+	for key, versionSeqNum := range w.keyVersionSeqNum {
 		for version, seqNum := range versionSeqNum {
-			if seqNum >= _dumpSeqNum {
-				delete(w.keyVersionSeqNumbers[keyHash], version)
-				continue
+			if seqNum >= _seqNum {
+				delete(w.keyVersionSeqNum[key], version)
 			}
-			if curVersion, ok := newLatestKeyVersion[keyHash]; ok {
-				if curVersion > version {
-					continue
-				}
-			}
-			newLatestKeyVersion[keyHash] = version
 		}
 	}
 
-	for keyHash, version := range newLatestKeyVersion {
-		w.latestVersions[keyHash] = version
-	}
-
-	return nil
+	return w.chain.Truncate(_seqNum)
 }
 
-// StreamEntries streams entries from the log into the returning channel. startSeqNum defines the beginning.
-// startSeqNum = 1 for all entries
-// endSeqNum = 0 for all entries
-func (w *writeAheadLog) StreamEntries(startSeqNum uint64, endSeqNum uint64, headOnly bool) <-chan Envelope {
-	recordStream := w.bucket.StreamRecords(startSeqNum, endSeqNum, headOnly)
-	return convertRecordStream(recordStream)
-}
-
-// LatestSequenceNumber .
-func (w *writeAheadLog) LatestSequenceNumber() uint64 {
-	return w.bucket.LatestSequenceNumber()
-}
-
-// LatestSequenceNumbers .
-func (w *writeAheadLog) LatestSequenceNumbers() []uint64 {
-	return w.bucket.LatestSequenceNumbers()
-}
-
-// StreamLatestEntries .
-func (w *writeAheadLog) StreamLatestEntries(headOnly bool) <-chan Envelope {
-	recordStream := w.bucket.StreamLatestRecords(headOnly)
-	return convertRecordStream(recordStream)
-}
-
-// Compress compresses the log
-func (w *writeAheadLog) Compress() error {
-	return w.bucket.Compress()
-}
-
-// CompressWithFilter compresses the bucket based on a given filter
-// for filter = true remove item
-// for filter = false keep item
-func (w *writeAheadLog) CompressWithFilter(filter func(item *Entry) bool) error {
-	bucketFilter := func(item *bucket.Record) bool {
-		entry := Entry{}
-		if err := recordToEntry(*item, &entry); err != nil {
-			return true
-		}
-		return filter(&entry)
-	}
-	return w.bucket.CompressWithFilter(bucketFilter)
-}
-
-// Close closes the log
-func (w *writeAheadLog) Close() error {
-	w.dataMutex.Lock()
-	defer w.dataMutex.Unlock()
-	w.closed = true
-	return w.bucket.Close()
-}
-
-// Remove removes the hole write ahead log from disk
-func (w *writeAheadLog) Remove() error {
-	w.dataMutex.RLock()
-	defer w.dataMutex.RUnlock()
-	if !w.closed {
-		return NotClosedErr
-	}
-	return w.bucket.Remove()
-}
-
-// IsClosed returns true if the log is already closed
-func (w *writeAheadLog) IsClosed() bool {
-	return w.closed
+func (w *wal) Length() uint64 {
+	return w.chain.Length()
 }
 
 // Size returns the size of the log in bytes
-func (w *writeAheadLog) Size() (int64, error) {
-	return w.bucket.Size()
+func (w *wal) Size() (int64, error) {
+	return w.chain.Size()
+}
+
+func (w *wal) FirstSeqNum() uint64 {
+	return w.chain.FirstSeqNum()
+}
+
+func (w *wal) SeqNum() uint64 {
+	return w.chain.SeqNum()
+}
+
+func (w *wal) KeySeqNums() map[uint64][]uint64 {
+	return w.chain.KeySeqNums()
+}
+
+func (w *wal) KeyVersionSeqNum() map[uint64]map[uint64]uint64 {
+	return w.keyVersionSeqNum
+}
+
+// IsClosed returns true if the log is already closed
+func (w *wal) IsClosed() bool {
+	return w.closed
+}
+
+// Close closes the log
+func (w *wal) Close() error {
+	w.closed = true
+	return w.chain.Close()
+}
+
+func (w *wal) consider(_key uint64, _seqNum uint64, _version uint64) {
+	if _, ok := w.keyVersionSeqNum[_key]; !ok {
+		w.keyVersionSeqNum[_key] = make(map[uint64]uint64)
+	}
+	w.keyVersionSeqNum[_key][_version] = _seqNum
 }

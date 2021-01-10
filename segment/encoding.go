@@ -22,9 +22,8 @@ func EncodeUint64(value uint64) []byte {
 }
 
 type Header struct {
-	PayloadSize  uint64
-	Key          uint64
-	PaddingBytes []byte
+	PayloadSize uint64
+	Key         uint64
 }
 
 func decodeHeader(_header *Header, _raw []byte) error {
@@ -37,7 +36,6 @@ func decodeHeader(_header *Header, _raw []byte) error {
 	if err != nil {
 		return err
 	}
-	_header.PaddingBytes = _raw[headerLength:]
 	return nil
 }
 
@@ -50,7 +48,6 @@ func encodeHeader(_header Header) ([]byte, error) {
 	buff.Write(EncodeUint64(_header.PayloadSize))
 	rawKey := EncodeUint64(_header.Key)
 	buff.Write(rawKey)
-	buff.Write(_header.PaddingBytes)
 
 	return buff.Bytes(), nil
 }

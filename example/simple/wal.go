@@ -3,12 +3,11 @@ package main
 import (
 	"fmt"
 
-	"github.com/ljmsc/wal/bucket"
 	"github.com/ljmsc/wal/wal"
 )
 
 func main() {
-	w, err := wal.Open("./path/to/wal", bucket.DefaultMaxSegmentSize, true, nil)
+	w, err := wal.Open("./path/to/wal", chain.DefaultMaxSegmentSize, true, nil)
 	if err != nil {
 		// handle error
 		panic(err)
@@ -23,7 +22,7 @@ func main() {
 	}
 	fmt.Printf("successful wrote entry. Sequence Number: %d Version: %d \n", foo.SequenceNumber(), foo.Version())
 
-	bar := wal.Entry{}
+	bar := wal.record{}
 	if err := w.ReadByKey([]byte("my_key"), false, &bar); err != nil {
 		// handle error
 		panic(err)

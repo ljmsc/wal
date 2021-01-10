@@ -12,7 +12,8 @@ type RecordEnvelope struct {
 // if a Header couldn't be read, the envelope contains an error.
 // the envelope could also contains parts of the data if a padding was provided
 type HeaderEnvelope struct {
-	Offset int64
-	Err    error
-	Header Header
+	Offset      int64
+	Header      Header
+	PaddingData []byte
+	Err         error
 }
