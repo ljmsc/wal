@@ -1,80 +1,23 @@
 package segment
 
 import (
+	"bytes"
+	"encoding"
 	"fmt"
-	"io"
 	"os"
+	"syscall"
 )
 
 // Segment .
 type Segment interface {
 	Name() string
-	ReadAt(_record Record, _offset int64) error
-	ReadKey(_record Record, _key uint64) error
-	Write(_record Record) (int64, error)
-	Truncate(_dumpOffset int64) error
-	Size() (int64, error)
-	Offset() int64
-	Offsets() []int64
-	KeyOffsets() map[uint64][]int64
+	Block() uint64
+	ReadAt(_record encoding.BinaryUnmarshaler, _offset uint64) error
+	Write(_record encoding.BinaryMarshaler) (uint64, error)
+	Truncate(_offset uint64) error
+	Size() (uint64, error)
 	IsClosed() bool
 	Close() error
-}
-
-// Keys returns a slice of all key written to the segment
-func Keys(_segment Segment) []uint64 {
-	keyOffsets := _segment.KeyOffsets()
-	keys := make([]uint64, 0, len(keyOffsets))
-	for key := range keyOffsets {
-		keys = append(keys, key)
-	}
-	return keys
-}
-
-// LatestKeyOffsets returns for each key the last written offset
-func LatestKeyOffsets(_segment Segment) map[uint64]int64 {
-	keyOffset := make(map[uint64]int64)
-	for key, offsets := range _segment.KeyOffsets() {
-		keyOffset[key] = offsets[len(offsets)-1]
-	}
-	return keyOffset
-}
-
-// LatestOffsets returns the latest offsets written to the segment
-func LatestOffsets(_segment Segment) []int64 {
-	keyOffset := LatestKeyOffsets(_segment)
-	latestOffsets := make([]int64, 0, len(keyOffset))
-	for _, offset := range keyOffset {
-		latestOffsets = append(latestOffsets, offset)
-	}
-	return latestOffsets
-}
-
-// Stream returns a channel which receives all records for the given offsets.
-// if the segments is closed the function returns nil
-func Stream(_segment Segment, _offsets []int64) <-chan RecordEnvelope {
-	if _segment.IsClosed() {
-		return nil
-	}
-	stream := make(chan RecordEnvelope)
-	go func() {
-		defer close(stream)
-		for _, offset := range _offsets {
-			r := record{}
-			if err := _segment.ReadAt(&r, offset); err != nil {
-				stream <- RecordEnvelope{
-					Offset: offset,
-					Err:    err,
-				}
-				continue
-			}
-			stream <- RecordEnvelope{
-				Offset: offset,
-				Record: &r,
-			}
-		}
-	}()
-	return stream
 }
 
 // Remove removes the segment from disc
@@ -89,80 +32,54 @@ func Remove(_segment Segment) error {
 	return nil
 }
 
-// Snapshot creates a snapshot of the given segment. the segment file content will be copied to a new file called name
-func Snapshot(_segment Segment, _snapshotName string) error {
-	if _, err := os.Stat(_snapshotName); !os.IsNotExist(err) {
-		return fmt.Errorf("file with name %s already exists: %w", _snapshotName, err)
-	}
-
-	snapFile, err := os.Create(_snapshotName)
-	if err != nil {
-		return fmt.Errorf("can't create snapshot file: %w", err)
-	}
-	defer snapFile.Close()
-
-	pfile, err := os.Open(_segment.Name())
-	if err != nil {
-		return fmt.Errorf("can't open segment file: %w", err)
-	}
-	defer pfile.Close()
-
-	if _, err := io.Copy(snapFile, pfile); err != nil {
-		return fmt.Errorf("can't copy content to snapshot file: %w", err)
-	}
-
-	return nil
-}
-
 // segment is the representation of the segment file
 type segment struct {
 	// name is the name if the segment file
 	name string
-	// keyOffsets - the map key is the value of the record Key and the value is the segment file offset
-	keyOffsets map[uint64][]int64
-	// offsets - the offsets of the written records
-	offsets []int64
+	// header contains the header information of the segment file
+	header header
 	// file is the segment file
 	file *os.File
 	// closed
 	closed bool
 }
 
-// Open opens a segment file with the given name. If the segment already exists the segment is read.
-// if handler function is defined it is called for each record in the segment and provides Header information
-func Open(_name string, _handler func(_segment Segment, _envelope HeaderEnvelope) error) (Segment, error) {
-	return OpenWithPadding(_name, 0, _handler)
-}
-
-// OpenWithPadding - same as Open but with padding for payload
-// the padding defines the length of payload bytes are read in addition to the Header.
-// use padding 0 for Header only or just use Open
-func OpenWithPadding(_name string, _padding uint64, _handler func(_segment Segment, _envelope HeaderEnvelope) error) (Segment, error) {
+// Open opens a segment file with the given name
+func Open(_name string, _block uint64, _size uint64) (Segment, error) {
 	s := segment{
-		name:       _name,
-		keyOffsets: make(map[uint64][]int64),
-		offsets:    []int64{},
-		closed:     false,
+		name:   _name,
+		closed: false,
 	}
+
 	var err error
 	s.file, err = os.OpenFile(_name, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0600)
 	if err != nil {
 		return nil, fmt.Errorf("can't open segment file: %w", err)
 	}
 
-	recordStream := s.streamHeaderWithPadding(_padding)
-	for envelope := range recordStream {
-		if envelope.Err != nil {
-			return nil, envelope.Err
+	size, err := s.Size()
+	if err != nil {
+		return nil, err
+	}
+	// segment file is empty
+	if size == 0 {
+		stat := syscall.Stat_t{}
+		if err := syscall.Stat(_name, &stat); err != nil {
+			return nil, err
 		}
-
-		s.consider(envelope.Offset, envelope.Header.Key)
-
-		if _handler != nil {
-			if err := _handler(&s, envelope); err != nil {
-				return nil, fmt.Errorf("can't execute _handler for record: %w", err)
-			}
+		s.header = header{
+			Version: V1,
+			Page:    uint64(stat.Blksize),
+			Block:   _block,
+			Size:    _size,
 		}
+		if err := s.writeHead(); err != nil {
+			return nil, err
+		}
+	}
+
+	if err := s.readHead(); err != nil {
+		return nil, fmt.Errorf("can't read segment file header: %w", err)
 	}
 
 	return &s, nil
@@ -173,46 +90,35 @@ func (s *segment) Name() string {
 	return s.name
 }
 
+func (s *segment) Block() uint64 {
+	return s.header.Block
+}
+
 // ReadAt reads the record at a given offset in the segment file
-func (s *segment) ReadAt(_record Record, _offset int64) error {
+func (s *segment) ReadAt(_record encoding.BinaryUnmarshaler, _offset uint64) error {
 	if s.closed {
 		return ClosedErr
 	}
 
-	recordSize, err := s.calculateRecordSize(_offset)
+	_blocks, err := s.blocks(_offset)
 	if err != nil {
-		return err
+		return fmt.Errorf("can't read from segment file: %w", err)
 	}
-
-	rawRecord := make([]byte, recordSize)
-	if _, err := s.file.ReadAt(rawRecord, _offset); err != nil {
-		if err == io.EOF {
-			return RecordNotFoundErr
+	buff := bytes.Buffer{}
+	for _, bl := range _blocks {
+		if _, err := buff.Write(bl.Payload); err != nil {
+			return err
 		}
-		return fmt.Errorf("can't read record from segment: %w", err)
 	}
-
-	if err := decode(_record, rawRecord); err != nil {
+	if err := _record.UnmarshalBinary(buff.Bytes()); err != nil {
 		return err
 	}
 
 	return nil
 }
 
-// ReadKey reads the latest record for a given record key
-func (s *segment) ReadKey(_record Record, _key uint64) error {
-	if _, ok := s.keyOffsets[_key]; !ok {
-		return RecordNotFoundErr
-	}
-	if len(s.keyOffsets[_key]) == 0 {
-		return RecordNotFoundErr
-	}
-	offset := s.keyOffsets[_key][len(s.keyOffsets[_key])-1]
-	return s.ReadAt(_record, offset)
-}
-
 // WriteRecord writes the given record at the end of the segment
-func (s *segment) Write(_record Record) (int64, error) {
+func (s *segment) Write(_record encoding.BinaryMarshaler) (uint64, error) {
 	if s.closed {
 		return 0, ClosedErr
 	}
@@ -222,95 +128,49 @@ func (s *segment) Write(_record Record) (int64, error) {
 		return 0, err
 	}
 
-	rawRecord, err := encode(_record)
+	raw, err := _record.MarshalBinary()
 	if err != nil {
 		return 0, err
 	}
 
-	if _, err := s.file.Write(rawRecord); err != nil {
-		return 0, fmt.Errorf("can't write to segment file: %w", err)
-	}
+	//todo: impl
 
 	if err := s.file.Sync(); err != nil {
 		return 0, fmt.Errorf("can't sync file changes to disk: %w", err)
 	}
 
-	s.consider(int64(offset), _record.Key())
-
 	return offset, nil
 }
 
 // Truncate - removes all records whose offset is greater or equal to offset. the removal is permanently.
-func (s *segment) Truncate(_dumpOffset int64) error {
+func (s *segment) Truncate(_offset uint64) error {
 	if s.closed {
 		return ClosedErr
 	}
 
-	info, err := os.Stat(s.name)
+	offset, err := s.Size()
 	if err != nil {
-		return fmt.Errorf("can't get file info from file: %w", err)
+		return err
 	}
-	currentOffset := info.Size()
-	if currentOffset <= _dumpOffset {
-		return fmt.Errorf("can't truncate segment. _dumpOffset to big")
+	if offset <= _offset {
+		return fmt.Errorf("can't truncate segment. offset to big")
 	}
 
-	if err := s.file.Truncate(_dumpOffset); err != nil {
+	if err := s.file.Truncate(int64(_offset)); err != nil {
 		return fmt.Errorf("can't truncate file: %w", err)
 	}
-
-	newRecordOffsets := make([]int64, 0, len(s.offsets))
-	for _, recordOffset := range s.offsets {
-		if recordOffset >= _dumpOffset {
-			break
-		}
-		newRecordOffsets = append(newRecordOffsets, recordOffset)
-	}
-	newRecordKeyOffsets := make(map[uint64][]int64)
-	for key, recordOffsets := range s.keyOffsets {
-		if len(recordOffsets) == 0 {
-			continue
-		}
-		for _, recordOffset := range recordOffsets {
-			if recordOffset >= _dumpOffset {
-				continue
-			}
-			newRecordKeyOffsets[key] = append(newRecordKeyOffsets[key], recordOffset)
-		}
-	}
-
-	s.offsets = newRecordOffsets
-	s.keyOffsets = newRecordKeyOffsets
 
 	return nil
 }
 
 // Size returns the byte size of the segment file
-func (s *segment) Size() (int64, error) {
+func (s *segment) Size() (uint64, error) {
 	// can't use seek function since file is append mode - use os.Stat instead
 	info, err := os.Stat(s.name)
 	if err != nil {
 		return 0, err
 	}
-	return info.Size(), nil
-}
-
-// Offset returns the offset of the last record which was written to the segment file
-func (s *segment) Offset() int64 {
-	if offsetCount := len(s.offsets); offsetCount > 0 {
-		return s.offsets[offsetCount-1]
-	}
-	return 0
-}
-
-// Offsets returns the offsets of all written record in the segment file
-func (s *segment) Offsets() []int64 {
-	return s.offsets
-}
-
-// KeyOffsets returns for each key all written offsets
-func (s *segment) KeyOffsets() map[uint64][]int64 {
-	return s.keyOffsets
+	return uint64(info.Size()), nil
 }
 
 // IsClosed returns true if the segment is already closed
@@ -325,96 +185,102 @@ func (s *segment) Close() error {
 	return s.file.Close()
 }
 
-// streamHeaderWithPadding scans the segment file on disc from beginning and decodes the raw data to record objects.
-// the padding defines the length of payload bytes are read in in addition to the Header bytes.
-// use padding 0 for Header only
-func (s *segment) streamHeaderWithPadding(_padding uint64) <-chan HeaderEnvelope {
-	readLength := headerLength + _padding
+func (s *segment) readHead() error {
+	if s.file == nil {
+		return fmt.Errorf("segment file is nil")
+	}
 
-	stream := make(chan HeaderEnvelope)
-	go func() {
-		defer close(stream)
+	headBlock := make([]byte, blockMetadataLength)
+	_, err := s.file.ReadAt(headBlock, 0)
+	if err != nil {
+		return err
+	}
+	if err := s.header.UnmarshalBinary(headBlock); err != nil {
+		return err
+	}
+	return nil
+}
 
-		currOffset := int64(0)
-		for {
-			raw := make([]byte, readLength)
-			n, err := s.file.ReadAt(raw, currOffset)
-			if n > 0 && uint64(n) != readLength {
-				stream <- HeaderEnvelope{Err: fmt.Errorf("can't read record data from file")}
-				return
-			}
-			if err != nil {
-				if err == io.EOF {
-					return
+func (s *segment) writeHead() error {
+	if s.file == nil {
+		return fmt.Errorf("segment file is nil")
+	}
+	raw, err := s.header.MarshalBinary()
+	if err != nil {
+		return err
+	}
+
+	_, err = s.file.Write(raw)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (s *segment) pageOffset(_offset uint64) uint64 {
+	return _offset - (_offset % s.header.Page)
+}
+
+func (s *segment) page(_offset uint64) (page []byte, err error) {
+	page = make([]byte, s.header.Page)
+	_, err = s.file.ReadAt(page, int64(_offset))
+	if err != nil {
+		return nil, err
+	}
+	return page, err
+}
+
+func (s *segment) blocks(_offset uint64) (_blocks []block, err error) {
+	po := s.pageOffset(_offset)
+	pageData, err := s.page(po)
+	if err != nil {
+		return nil, err
+	}
+	bloff := _offset - po
+	raw := pageData[bloff:]
+	_block := block{}
+	if err := _block.UnmarshalBinary(raw[:s.header.Block]); err != nil {
+		return nil, err
+	}
+	raw = raw[s.header.Block:]
+	if !_block.First {
+		return nil, fmt.Errorf("can't find start of record")
+	}
+	_blocks = make([]block, 0, _block.Length+1)
+	_blocks = append(_blocks, _block)
+	if _block.Length > 0 {
+		for i := uint64(1); i <= uint64(_block.Length); i++ {
+			if len(raw) == 0 {
+				// load new page
+				raw, err = s.page(po + (i * s.header.Page))
+				if err != nil {
+					return nil, err
 				}
-				stream <- HeaderEnvelope{Err: err}
-				return
 			}
-			h := Header{}
-			if err := decodeHeader(&h, raw); err != nil {
-				stream <- HeaderEnvelope{Err: err}
-				return
+			if uint64(len(raw)) < s.header.Block {
+				return nil, fmt.Errorf("invalid raw data. not enough bytes")
 			}
-
-			stream <- HeaderEnvelope{
-				Offset:      currOffset,
-				Header:      h,
-				PaddingData: raw[headerLength:],
+			_block := block{}
+			if err := _block.UnmarshalBinary(raw[:s.header.Block]); err != nil {
+				return nil, err
 			}
-
-			currOffset += headerPayloadSizeFieldLength + int64(h.PayloadSize)
+			_blocks = append(_blocks, _block)
+			raw = raw[s.header.Block:]
 		}
-	}()
-
-	return stream
+	}
+	return _blocks, nil
 }
 
-func (s *segment) consider(_offset int64, _key uint64) {
-	if s.offsets == nil {
-		s.offsets = []int64{}
+func (s *segment) block(_offset uint64) (_block block, err error) {
+	p, err := s.page(s.pageOffset(_offset))
+	if err != nil {
+		return block{}, err
 	}
-
-	if s.keyOffsets == nil {
-		s.keyOffsets = make(map[uint64][]int64)
+	bo := _offset - (_offset % s.header.Block)
+	bb := p[bo : bo+s.header.Block]
+	_block = block{}
+	if err = _block.UnmarshalBinary(bb); err != nil {
+		return block{}, err
 	}
-
-	s.offsets = append(s.offsets, _offset)
-	if _, ok := s.keyOffsets[_key]; !ok {
-		s.keyOffsets[_key] = []int64{}
-	}
-
-	s.keyOffsets[_key] = append(s.keyOffsets[_key], _offset)
-
-	listLen := len(s.offsets)
-	if listLen > 1 {
-		if s.offsets[listLen-1] < s.offsets[listLen-2] {
-			// switch slice items if not sorted
-			temp := s.offsets[listLen-2]
-			s.offsets[listLen-2] = s.offsets[listLen-1]
-			s.offsets[listLen-1] = temp
-		}
-	}
-}
-
-func (s *segment) calculateRecordSize(_offset int64) (int64, error) {
-	nextOffsetIndex := 0
-	for i, offset := range s.offsets {
-		if offset == _offset {
-			nextOffsetIndex = i + 1
-			break
-		}
-	}
-	if nextOffsetIndex == 0 {
-		return 0, RecordNotFoundErr
-	}
-
-	if nextOffsetIndex > len(s.offsets)-1 {
-		s, err := s.Size()
-		if s < _offset && err != nil {
-			return 0, err
-		}
-		return s - _offset, nil
-	}
-
-	return (s.offsets[nextOffsetIndex] - _offset), nil
+	return _block, err
 }

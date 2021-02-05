@@ -7,80 +7,129 @@ import (
 )
 
 const (
-	headerPayloadSizeFieldLength = 8
-	headerLength                 = headerKeyHashFieldLength + headerPayloadSizeFieldLength
+	headerVersionLength  = 1
+	headerPageLength     = 8
+	headerBlockLength    = 8
+	headerSizeLength     = 8
+	headerMetadataLength = headerVersionLength + headerPageLength + headerBlockLength + headerSizeLength
+
+	blockFlagLength     = 1
+	blockLengthLength   = 4
+	blockMetadataLength = blockFlagLength + blockLengthLength
 )
 
-func DecodeUint64(_raw []byte) uint64 {
+type formatVersion uint8
+
+const (
+	V1 = 1
+)
+
+// header contains the metadata information of the segment (25 byte)
+type header struct {
+	// Version is the version of the segment file format. (1 byte)
+	Version formatVersion
+	// Page is the size of the pages on disk. this value is defined by the filesystem (8 byte)
+	Page uint64
+	// Block is the size of each record block on disk in bytes. (8 byte)
+	Block uint64
+	// Size is the amount of records which can be written to the segment file (8 byte)
+	Size uint64
+}
+
+func (h *header) MarshalBinary() (data []byte, err error) {
+	buff := bytes.Buffer{}
+	_, err = buff.Write([]byte{uint8(h.Version)})
+	if err != nil {
+		return nil, err
+	}
+	_, err = buff.Write(encodeUint64(h.Page))
+	if err != nil {
+		return nil, err
+	}
+	_, err = buff.Write(encodeUint64(h.Block))
+	if err != nil {
+		return nil, err
+	}
+	_, err = buff.Write(encodeUint64(h.Size))
+	if err != nil {
+		return nil, err
+	}
+	data = buff.Bytes()
+	return data, nil
+}
+
+func (h *header) UnmarshalBinary(data []byte) error {
+	if len(data) < headerMetadataLength {
+		return fmt.Errorf("not enough bytes")
+	}
+	h.Version = formatVersion(data[0])
+	data = data[headerVersionLength:]
+	h.Page = decodeUint64(data[:headerPageLength])
+	data = data[headerPageLength:]
+	h.Block = decodeUint64(data[:headerBlockLength])
+	data = data[headerBlockLength:]
+	h.Size = decodeUint64(data[:headerSizeLength])
+	return nil
+}
+
+// block contains the information of a block in the segment
+type block struct {
+	// First defines if this block is the first block of a record
+	First bool
+	// Length defines how many blocks are following to build the fill record
+	Length uint32
+	// Payload is the payload of the block
+	Payload []byte
+}
+
+func (b *block) MarshalBinary() (data []byte, err error) {
+	buff := bytes.Buffer{}
+	var flags byte
+	flags |= (1 << 0)
+	_, err = buff.Write([]byte{flags})
+	if err != nil {
+		return nil, err
+	}
+	_, err = buff.Write(encodeUint32(b.Length))
+	if err != nil {
+		return nil, err
+	}
+	_, err = buff.Write(b.Payload)
+	if err != nil {
+		return nil, err
+	}
+	return buff.Bytes(), nil
+}
+
+func (b *block) UnmarshalBinary(data []byte) error {
+	if len(data) < blockMetadataLength {
+		return fmt.Errorf("not enough bytes")
+	}
+	flags := data[0]
+	b.First = (flags & (1 << 0)) != 0
+	data = data[blockFlagLength:]
+	b.Length = decodeUint32(data[:blockLengthLength])
+	data = data[blockLengthLength:]
+	b.Payload = data
+	return nil
+}
+
+func decodeUint32(_raw []byte) uint32 {
+	return binary.LittleEndian.Uint32(_raw)
+}
+
+func decodeUint64(_raw []byte) uint64 {
 	return binary.LittleEndian.Uint64(_raw)
 }
 
-func EncodeUint64(value uint64) []byte {
+func encodeUint64(value uint64) []byte {
 	raw := make([]byte, 8)
 	binary.LittleEndian.PutUint64(raw, value)
 	return raw
 }
 
-type Header struct {
-	PayloadSize uint64
-	Key         uint64
-}
-
-func decodeHeader(_header *Header, _raw []byte) error {
-	if len(_raw) < headerPayloadSizeFieldLength {
-		return fmt.Errorf("not enough bytes for decoding")
-	}
-	var err error
-	_header.PayloadSize = DecodeUint64(_raw[:headerPayloadSizeFieldLength])
-	_header.Key, err = decodeKey(_raw[headerPayloadSizeFieldLength:headerLength])
-	if err != nil {
-		return err
-	}
-	return nil
-}
-
-func encodeHeader(_header Header) ([]byte, error) {
-	if _header.PayloadSize == 0 {
-		return nil, fmt.Errorf("Header PayloadSize is zero")
-	}
-
-	buff := bytes.Buffer{}
-	buff.Write(EncodeUint64(_header.PayloadSize))
-	rawKey := EncodeUint64(_header.Key)
-	buff.Write(rawKey)
-
-	return buff.Bytes(), nil
-}
-
-// encode encodes the given record into a byte slice for including the Header information.
-func encode(_record Record) ([]byte, error) {
-	buff := bytes.Buffer{}
-
-	rawRecord, err := _record.Encode()
-	if err != nil {
-		return nil, err
-	}
-
-	// add header information
-	buff.Write(EncodeUint64(uint64(len(rawRecord))))
-	buff.Write(rawRecord)
-
-	return buff.Bytes(), nil
-}
-
-// decode decodes the byte slices into the given record object.
-func decode(_record Record, _raw []byte) error {
-	header := Header{}
-	if err := decodeHeader(&header, _raw[:headerLength]); err != nil {
-		return err
-	}
-	if header.PayloadSize != uint64(len(_raw[headerPayloadSizeFieldLength:])) {
-		return fmt.Errorf("not enough bytes to decode record")
-	}
-
-	if err := _record.Decode(_raw[headerPayloadSizeFieldLength:]); err != nil {
-		return err
-	}
-
-	return nil
+func encodeUint32(value uint32) []byte {
+	raw := make([]byte, 4)
+	binary.LittleEndian.PutUint32(raw, value)
+	return raw
 }
