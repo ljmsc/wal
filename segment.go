@@ -1,13 +1,16 @@
 package wal
 
 import (
+	"errors"
 	"fmt"
+	"io"
 	"os"
 )
 
 var (
 	maxSizeErr     = fmt.Errorf("segment already reached maximum size")
 	offsetBlockErr = fmt.Errorf("offset must be start of block")
+	recordNotFound = fmt.Errorf("record not found")
 )
 
 type segment struct {
@@ -52,7 +55,7 @@ func (s *segment) readHeader() error {
 }
 
 func (s *segment) writeHeader(_split int64, _size int64) error {
-	ps, err := pageSize()
+	ps, err := pageSize(s.file.Name())
 	if err != nil {
 		return err
 	}
@@ -87,6 +90,10 @@ func (s *segment) isBlock(_offset int64) bool {
 	return _offset%s.header.Block == 0
 }
 
+func (s *segment) page(_offset int64) int64 {
+	return _offset - (_offset % s.header.Page)
+}
+
 func (s *segment) size() (int64, error) {
 	stat, err := s.file.Stat()
 	if err != nil {
@@ -95,7 +102,7 @@ func (s *segment) size() (int64, error) {
 	return stat.Size(), nil
 }
 
-// free returns the free block space of the segment
+// free returns the free blocks in the segment
 func (s *segment) free() int64 {
 	size, err := s.size()
 	if err != nil {
@@ -109,29 +116,45 @@ func (s *segment) readAt(_record *record, _offset int64) error {
 	if !s.isBlock(_offset) {
 		return offsetBlockErr
 	}
-	_block := block{}
-	raw := make([]byte, s.header.Block)
-	if _, err := s.file.ReadAt(raw, _offset); err != nil {
-		return nil, err
-	}
-	if err := _block.unmarshal(raw); err != nil {
-		return nil, err
+
+	// can't read header as record
+	if _offset == 0 {
+		return fmt.Errorf("can't read header as offset")
 	}
 
-	_blocks := make([]block, 1, _block.Follow+1)
+	pa := s.page(_offset)
+	rs := s.header.Page - (_offset - pa)
+	raw := make([]byte, rs)
+	n, err := s.file.ReadAt(raw, _offset)
+	if err != nil {
+		if !errors.Is(err, io.EOF) {
+			return err
+		}
+		if n == 0 {
+			return recordNotFound
+		}
+	}
 
-	// add the first block
-	_blocks[0] = _block
-	if _block.Follow > 0 {
-		raw := make([]byte, s.header.Block*int64(_block.Follow))
-		if _, err := s.file.ReadAt(raw, _offset+s.header.Block); err != nil {
-			return nil, err
+	if err := _record.unmarshal(raw); err != nil {
+		if !errors.Is(err, invalidChecksumErr) || _record.size <= (uint64(s.header.Page)-recordMetadataLength) {
+			return err
 		}
-		fb, err := fragment(raw, s.header.Block)
-		if err != nil {
-			return nil, err
+	}
+
+	// more than one block
+	if _record.size > (uint64(s.header.Page) - recordMetadataLength) {
+		raw := make([]byte, _record.size-uint64(len(_record.payload)))
+		if _, err := s.file.ReadAt(raw, pa+s.header.Page); err != nil {
+			if !errors.Is(err, io.EOF) {
+				return err
+			}
+			if n == 0 {
+				return recordNotFound
+			}
 		}
-		_blocks = append(_blocks, fb...)
+		if err := _record.appendPayload(raw); err != nil {
+			return err
+		}
 	}
 
 	return nil
@@ -140,7 +163,7 @@ func (s *segment) readAt(_record *record, _offset int64) error {
 // write writes the record to the segment
 func (s *segment) write(_record record) (int64, error) {
 	// check if enough space is available to write all blocks
-	if s.free() < int64(len(_blocks)) {
+	if s.free() < _record.blockC(s.header.Block) {
 		return 0, maxSizeErr
 	}
 
@@ -150,14 +173,21 @@ func (s *segment) write(_record record) (int64, error) {
 		return 0, err
 	}
 
-	// combine blocks to byte slice
-	raw, err := deFragment(_blocks, s.header.Block)
+	raw, err := _record.marshal()
 	if err != nil {
 		return 0, err
 	}
 
+	// inflate raw chunk to block size
+	blks := int64(len(raw)) / s.header.Block
+	if (int64(len(raw)) % s.header.Block) > 0 {
+		blks++
+	}
+	rawBlocks := make([]byte, blks*s.header.Block)
+	copy(rawBlocks, raw)
+
 	// write combined data to segment file
-	if _, err := s.file.Write(raw); err != nil {
+	if _, err := s.file.Write(rawBlocks); err != nil {
 		return 0, err
 	}
 

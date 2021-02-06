@@ -1,6 +1,7 @@
 package wal
 
 import (
+	"fmt"
 	"os"
 	"strconv"
 	"testing"
@@ -30,18 +31,14 @@ func createTestSegmentFilled(is *is.I, _dir string, _split int64, _size int64) *
 	s, err := createSegment(_dir+"test", _split, _size)
 	is.NoErr(err)
 
-	_blocks := make([]block, 0, _size-1)
 	for i := int64(0); i < _size-1; i++ {
-		_data := []byte("this is my awesome test data " + strconv.FormatInt(i, 10))
-		_block := block{
-			First:   true,
-			Follow:  0,
-			Payload: _data,
+		_r := record{
+			seqNum:  uint64(i + 1),
+			payload: []byte("this is my awesome test data " + strconv.FormatInt(i, 10)),
 		}
-		_blocks = append(_blocks, _block)
+		_, err := s.write(_r)
+		is.NoErr(err)
 	}
-	_, err = s.write(_blocks)
-	is.NoErr(err)
 
 	return s
 }
@@ -49,17 +46,18 @@ func createTestSegmentFilled(is *is.I, _dir string, _split int64, _size int64) *
 func TestCreateSegment(t *testing.T) {
 	is := is.New(t)
 	dir := "tmp/segmentcreate/"
+	filename := dir + "test"
 	defer cleanup(dir)
 	prepare(dir)
 
 	_split := int64(4)
 	_size := int64(100)
-	_page, _ := pageSize()
-	blksize := _page / _split
 
-	s, err := createSegment(dir+"test", _split, _size)
+	s, err := createSegment(filename, _split, _size)
 	is.NoErr(err)
 	is.True(s != nil)
+	_page, _ := pageSize(filename)
+	blksize := _page / _split
 
 	err = s.readHeader()
 	is.NoErr(err)
@@ -72,9 +70,10 @@ func TestCreateSegment(t *testing.T) {
 	is.NoErr(err)
 }
 
-func TestSegmentWriteSingleBlocks(t *testing.T) {
+func TestSegmentWrite(t *testing.T) {
 	is := is.New(t)
 	dir := "tmp/segmentwrite/"
+	filename := dir + "test"
 	defer cleanup(dir)
 	prepare(dir)
 
@@ -88,18 +87,17 @@ func TestSegmentWriteSingleBlocks(t *testing.T) {
 	is.Equal(s.free(), _size-1)
 
 	for i := int64(0); i < _size-1; i++ {
-		_data := []byte("this is my data" + strconv.FormatInt(i, 10))
-		_block := block{
-			First:   true,
-			Follow:  0,
-			Payload: _data,
+		_r := record{
+			seqNum:  uint64(i + 1),
+			payload: []byte("this is my data" + strconv.FormatInt(i, 10)),
 		}
-		offset, err := s.write([]block{_block})
+		offset, err := s.write(_r)
 		is.NoErr(err)
 		is.True(offset > 0)
+		is.Equal(offset%s.header.Block, int64(0))
 	}
 
-	ps, _ := pageSize()
+	ps, _ := pageSize(filename)
 	is.Equal(s.free(), int64(0))
 
 	segSize, err := s.size()
@@ -107,35 +105,23 @@ func TestSegmentWriteSingleBlocks(t *testing.T) {
 	is.Equal(segSize, _size*(ps/_split))
 }
 
-func TestSegmentWriteMultiBlocks(t *testing.T) {
+func TestSegmentBlockCount(t *testing.T) {
 	is := is.New(t)
-	dir := "tmp/segmentwrite2/"
+	dir := "tmp/segmentblock/"
+	filename := dir + "test"
 	defer cleanup(dir)
 	prepare(dir)
 
 	_size := int64(20)
+	_split := int64(4)
 
-	s := createTestSegment(is, dir, 4, _size)
+	s := createTestSegmentFilled(is, dir, _split, _size)
 	defer s.close()
 
-	// need to substract 1 since the header is already written to the first block
-	is.Equal(s.free(), _size-1)
-
-	_blocks := make([]block, 0, _size-1)
-	for i := int64(0); i < _size-1; i++ {
-		_data := []byte("this is my data" + strconv.FormatUint(uint64(i), 10))
-		_block := block{
-			First:   true,
-			Follow:  0,
-			Payload: _data,
-		}
-		_blocks = append(_blocks, _block)
-	}
-
-	offset, err := s.write(_blocks)
+	pages, err := pages(filename)
 	is.NoErr(err)
-	is.True(offset > 0)
-	is.Equal(s.free(), int64(0))
+	is.Equal(pages, _size/_split)
+
 }
 
 func TestSegmentRead(t *testing.T) {
@@ -145,15 +131,23 @@ func TestSegmentRead(t *testing.T) {
 	prepare(dir)
 
 	_size := int64(20)
+	_split := int64(4)
+	_page, _ := pageSizefs(dir)
+	blksize := _page / _split
 
-	s := createTestSegmentFilled(is, dir, 4, _size)
+	s := createTestSegmentFilled(is, dir, _split, _size)
 	defer s.close()
 
 	for i := int64(0); i < _size-1; i++ {
-		_blocks, err := s.readAt(s.header.Block * (i + 1))
+		_data := []byte("this is my awesome test data " + strconv.FormatInt(i, 10))
+		_r := record{}
+		// i + 1 since the first block is reserved for header information
+		offset := (i + 1) * blksize
+		err := s.readAt(&_r, offset)
+		fmt.Printf("%d \n", offset)
 		is.NoErr(err)
-
-		is.Equal(len(_blocks), 1)
+		is.Equal(_r.seqNum, uint64((i + 1)))
+		is.Equal(_r.payload, _data)
 	}
 }
 

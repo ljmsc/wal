@@ -1,7 +1,6 @@
 package wal
 
 import (
-	"errors"
 	"io"
 )
 
@@ -72,40 +71,7 @@ func (w *wal) ReadAt(_w io.Writer, _seqNum uint64) error {
 
 // Write writes the given record on disk and returns the new sequence number
 func (w *wal) Write(_r io.Reader) (uint64, error) {
-	seg := w.seg()
-	blocks := []block{}
-	i := 0
-	for {
-		b := make([]byte, (seg.header.Block - blockMetadataLength))
-		n, err := _r.Read(b)
-		if n > 0 {
-			_block := block{
-				First:   i == 0,
-				Follow:  0,
-				Payload: b,
-			}
-			blocks = append(blocks, _block)
-		}
-		if err != nil {
-			if errors.Is(err, io.EOF) {
-				break
-			}
-			return 0, err
-		}
-		i++
-	}
-
-	for i := 0; i < len(blocks); i++ {
-		blocks[i].Follow = uint32(len(blocks) - (i + 1))
-	}
-
-	_, err := seg.write(blocks)
-	if err != nil {
-		return 0, err
-	}
-
-	w.seqNum += 1
-	return w.seqNum, nil
+	panic("implement me")
 }
 
 func (w *wal) Truncate(_seqNum uint64) error {

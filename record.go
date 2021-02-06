@@ -12,35 +12,48 @@ const (
 	recordMetadataLength = recordSeqNumLength + recordSizeLength + recordChecksumLength
 )
 
+var (
+	invalidChecksumErr = fmt.Errorf("invalid checksum")
+)
+
 type record struct {
-	// SeqNum is the sequence number of the record in the write ahead log
+	// seqNum is the sequence number of the record in the write ahead log
 	seqNum uint64
 	// size is the total length of the payload
 	size uint64
 	// checksum is a checksum of the payload
 	checksum uint64
-	// Payload is the payload of the block
+	// payload is the payload of the block
 	payload []byte
+}
+
+func (r *record) blockC(_blockSize int64) int64 {
+	c := (int64(len(r.payload)) + recordMetadataLength) / _blockSize
+	if int64(len(r.payload))+recordMetadataLength%_blockSize > 0 {
+		c++
+	}
+	return c
 }
 
 func (r *record) marshal() (data []byte, err error) {
 	buff := bytes.Buffer{}
 
+	// sequence number
 	_, err = buff.Write(encodeUint64(r.seqNum))
 	if err != nil {
 		return nil, err
 	}
-
+	// size
 	_, err = buff.Write(encodeUint64(uint64(len(r.payload))))
 	if err != nil {
 		return nil, err
 	}
-
+	// checksum
 	_, err = buff.Write(encodeUint64(sum(r.payload)))
 	if err != nil {
 		return nil, err
 	}
-
+	// payload
 	_, err = buff.Write(r.payload)
 	if err != nil {
 		return nil, err
@@ -49,32 +62,47 @@ func (r *record) marshal() (data []byte, err error) {
 	return buff.Bytes(), nil
 }
 
-func (r *record) unmarshalMetadata(_data []byte) error {
+func (r *record) unmarshal(_data []byte) error {
 	if len(_data) < recordMetadataLength {
 		return fmt.Errorf("not enough bytes")
 	}
 
+	// sequence number
 	r.seqNum = decodeUint64(_data[:recordSeqNumLength])
 	_data = _data[recordSeqNumLength:]
 
+	// size
 	r.size = decodeUint64(_data[:recordSizeLength])
 	_data = _data[recordSizeLength:]
 
+	// checksum
 	r.checksum = decodeUint64(_data[:recordChecksumLength])
 	_data = _data[recordChecksumLength:]
+
+	// payload
+	size := r.size
+	if uint64(len(_data)) < r.size {
+		size = uint64(len(_data))
+	}
+	r.payload = _data[:size]
+
+	if !check(r.payload, r.checksum) {
+		return invalidChecksumErr
+	}
 
 	return nil
 }
 
-func (r *record) unmarshalPayload(data []byte) error {
+func (r *record) appendPayload(_data []byte) error {
 	if r.seqNum == 0 || r.checksum == 0 || r.size == 0 {
 		return fmt.Errorf("header not set")
 	}
-	if uint64(len(data)) < r.size {
-		return fmt.Errorf("not enough bytes")
-	}
 
-	r.payload = data[:r.size]
+	r.payload = append(r.payload, _data...)
+
+	if uint64(len(r.payload)) != r.size {
+		return fmt.Errorf("payload size missmatch")
+	}
 
 	if !check(r.payload, r.checksum) {
 		return invalidChecksumErr
