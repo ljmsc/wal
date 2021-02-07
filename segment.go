@@ -8,23 +8,25 @@ import (
 )
 
 var (
-	maxSizeErr     = fmt.Errorf("segment already reached maximum size")
-	offsetBlockErr = fmt.Errorf("offset must be start of block")
-	recordNotFound = fmt.Errorf("record not found")
+	errMaxSize     = fmt.Errorf("segment already reached maximum size")
+	errOffsetBlock = fmt.Errorf("offsetBy must be start of block")
 )
 
 type segment struct {
-	file   *os.File
-	header header
+	file    *os.File
+	header  header
+	offsets []int64
 }
 
-func createSegment(_name string, _split int64, _size int64) (*segment, error) {
-	s := segment{}
+func openSegment(_name string, _split int64, _size int64) (*segment, error) {
+	s := segment{
+		offsets: []int64{},
+	}
 
 	var err error
 	s.file, err = os.OpenFile(_name, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0600)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("can't open segment file: %w", err)
 	}
 
 	size, err := s.size()
@@ -40,13 +42,39 @@ func createSegment(_name string, _split int64, _size int64) (*segment, error) {
 	if err := s.readHeader(); err != nil {
 		return nil, err
 	}
+	if err := s.scan(); err != nil {
+		return nil, err
+	}
 	return &s, nil
+}
+
+func (s *segment) scan() error {
+	offset := s.header.Block
+	for {
+		pData := make([]byte, recordMetadataLength)
+		if _, err := s.file.ReadAt(pData, offset); err != nil {
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			return fmt.Errorf("can't read from segment file: %w", err)
+		}
+		r := record{}
+		if err := r.unmarshal(pData); err != nil {
+			if !errors.Is(err, errInvalidChecksum) || !r.validMeta() {
+				return err
+			}
+		}
+		s.offsets = append(s.offsets, offset)
+		offset += r.blockC(s.header.Block) * s.header.Block
+	}
+
+	return nil
 }
 
 func (s *segment) readHeader() error {
 	raw := make([]byte, headerLength)
 	if _, err := s.file.ReadAt(raw, 0); err != nil {
-		return err
+		return fmt.Errorf("can't read from segment file: %w", err)
 	}
 	if err := s.header.unmarshal(raw); err != nil {
 		return err
@@ -80,7 +108,7 @@ func (s *segment) writeHeader(_split int64, _size int64) error {
 	copy(raw, rawh)
 
 	if _, err := s.file.Write(raw); err != nil {
-		return err
+		return fmt.Errorf("can't write to segment file: %w", err)
 	}
 	return nil
 }
@@ -90,14 +118,10 @@ func (s *segment) isBlock(_offset int64) bool {
 	return _offset%s.header.Block == 0
 }
 
-func (s *segment) page(_offset int64) int64 {
-	return _offset - (_offset % s.header.Page)
-}
-
 func (s *segment) size() (int64, error) {
 	stat, err := s.file.Stat()
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("can't read segment file stats: %w", err)
 	}
 	return stat.Size(), nil
 }
@@ -111,50 +135,68 @@ func (s *segment) free() int64 {
 	return s.header.Size - (size / s.header.Block)
 }
 
+func (s *segment) readPage(_offset int64) ([]byte, error) {
+	pOffset := _offset - (_offset % s.header.Page)
+
+	pData := make([]byte, s.header.Page)
+	n, err := s.file.ReadAt(pData, pOffset)
+	if err != nil {
+		if !errors.Is(err, io.EOF) || n == 0 {
+			return nil, fmt.Errorf("can't read from segment file: %w", err)
+		}
+	}
+	return pData, nil
+}
+
 // readAt reads the record from _offset
 func (s *segment) readAt(_record *record, _offset int64) error {
 	if !s.isBlock(_offset) {
-		return offsetBlockErr
+		return errOffsetBlock
+	}
+
+	if _record == nil {
+		return fmt.Errorf("record is nil")
 	}
 
 	// can't read header as record
 	if _offset == 0 {
-		return fmt.Errorf("can't read header as offset")
+		return fmt.Errorf("can't read header as offsetBy")
 	}
 
-	pa := s.page(_offset)
-	rs := s.header.Page - (_offset - pa)
-	raw := make([]byte, rs)
-	n, err := s.file.ReadAt(raw, _offset)
+	pDelta := _offset % s.header.Page
+	pOffset := _offset - pDelta
+	pData, err := s.readPage(pOffset)
 	if err != nil {
-		if !errors.Is(err, io.EOF) {
-			return err
+		if errors.Is(err, io.EOF) {
+			return ErrEntryNotFound
 		}
-		if n == 0 {
-			return recordNotFound
+		return err
+	}
+	pData = pData[pDelta:]
+
+	if err := _record.unmarshal(pData); err != nil {
+		if !errors.Is(err, errInvalidChecksum) || _record.size <= (uint64(s.header.Page)-recordMetadataLength) {
+			return err
 		}
 	}
 
-	if err := _record.unmarshal(raw); err != nil {
-		if !errors.Is(err, invalidChecksumErr) || _record.size <= (uint64(s.header.Page)-recordMetadataLength) {
-			return err
-		}
+	if _record.size <= (uint64(s.header.Page) - recordMetadataLength) {
+		return nil
 	}
 
 	// more than one block
-	if _record.size > (uint64(s.header.Page) - recordMetadataLength) {
-		raw := make([]byte, _record.size-uint64(len(_record.payload)))
-		if _, err := s.file.ReadAt(raw, pa+s.header.Page); err != nil {
-			if !errors.Is(err, io.EOF) {
-				return err
-			}
-			if n == 0 {
-				return recordNotFound
-			}
+
+	raw := make([]byte, _record.size-uint64(len(_record.payload)))
+	if n, err := s.file.ReadAt(raw, pOffset+s.header.Page); err != nil {
+		if !errors.Is(err, io.EOF) {
+			return fmt.Errorf("can't read from segment file: %w", err)
 		}
-		if err := _record.appendPayload(raw); err != nil {
-			return err
+		if n == 0 {
+			return ErrEntryNotFound
 		}
+	}
+	if err := _record.appendPayload(raw); err != nil {
+		return err
 	}
 
 	return nil
@@ -164,10 +206,10 @@ func (s *segment) readAt(_record *record, _offset int64) error {
 func (s *segment) write(_record record) (int64, error) {
 	// check if enough space is available to write all blocks
 	if s.free() < _record.blockC(s.header.Block) {
-		return 0, maxSizeErr
+		return 0, errMaxSize
 	}
 
-	// get current size as offset for written data
+	// get current size as offsetBy for written data
 	wOff, err := s.size()
 	if err != nil {
 		return 0, err
@@ -188,9 +230,10 @@ func (s *segment) write(_record record) (int64, error) {
 
 	// write combined data to segment file
 	if _, err := s.file.Write(rawBlocks); err != nil {
-		return 0, err
+		return 0, fmt.Errorf("can't write to segment file: %w", err)
 	}
 
+	s.offsets = append(s.offsets, wOff)
 	return wOff, nil
 }
 
@@ -199,10 +242,22 @@ func (s *segment) sync() error {
 	return s.file.Sync()
 }
 
+// offsetBy returns the offsetBy of the record on position _pos. _pos must be > 0
+func (s *segment) offsetBy(_pos uint64) (int64, error) {
+	if _pos <= 0 {
+		return 0, fmt.Errorf("invalid position: %d", _pos)
+	}
+	if uint64(len(s.offsets)) < _pos {
+		return 0, ErrEntryNotFound
+	}
+
+	return s.offsets[_pos-1], nil
+}
+
 // truncate .
 func (s *segment) truncate(_offset int64) error {
 	if !s.isBlock(_offset) {
-		return offsetBlockErr
+		return errOffsetBlock
 	}
 	return s.file.Truncate(_offset)
 }

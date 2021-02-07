@@ -35,5 +35,5 @@ func TestPages(t *testing.T) {
 
 	p, err := pages(testFile)
 	is.NoErr(err)
-	is.Equal(p, int64(blockC))
+	is.Equal(p, blockC)
 }

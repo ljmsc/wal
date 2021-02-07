@@ -1,7 +1,6 @@
 package wal
 
 import (
-	"fmt"
 	"os"
 	"strconv"
 	"testing"
@@ -22,18 +21,17 @@ func cleanup(dir string) {
 }
 
 func createTestSegment(is *is.I, _dir string, _split int64, _size int64) *segment {
-	s, err := createSegment(_dir+"test", _split, _size)
+	s, err := openSegment(_dir+"test", _split, _size)
 	is.NoErr(err)
 	return s
 }
 
 func createTestSegmentFilled(is *is.I, _dir string, _split int64, _size int64) *segment {
-	s, err := createSegment(_dir+"test", _split, _size)
+	s, err := openSegment(_dir+"test", _split, _size)
 	is.NoErr(err)
 
 	for i := int64(0); i < _size-1; i++ {
 		_r := record{
-			seqNum:  uint64(i + 1),
 			payload: []byte("this is my awesome test data " + strconv.FormatInt(i, 10)),
 		}
 		_, err := s.write(_r)
@@ -53,9 +51,13 @@ func TestCreateSegment(t *testing.T) {
 	_split := int64(4)
 	_size := int64(100)
 
-	s, err := createSegment(filename, _split, _size)
+	s, err := openSegment(filename, _split, _size)
 	is.NoErr(err)
 	is.True(s != nil)
+	if s == nil {
+		t.FailNow()
+		return
+	}
 	_page, _ := pageSize(filename)
 	blksize := _page / _split
 
@@ -83,12 +85,11 @@ func TestSegmentWrite(t *testing.T) {
 	s := createTestSegment(is, dir, _split, _size)
 	defer s.close()
 
-	// need to substract 1 since the header is already written to the first block
+	// need to subtract 1 since the header is already written to the first block
 	is.Equal(s.free(), _size-1)
 
 	for i := int64(0); i < _size-1; i++ {
 		_r := record{
-			seqNum:  uint64(i + 1),
 			payload: []byte("this is my data" + strconv.FormatInt(i, 10)),
 		}
 		offset, err := s.write(_r)
@@ -96,6 +97,9 @@ func TestSegmentWrite(t *testing.T) {
 		is.True(offset > 0)
 		is.Equal(offset%s.header.Block, int64(0))
 	}
+
+	err := s.sync()
+	is.NoErr(err)
 
 	ps, _ := pageSize(filename)
 	is.Equal(s.free(), int64(0))
@@ -121,7 +125,6 @@ func TestSegmentBlockCount(t *testing.T) {
 	pages, err := pages(filename)
 	is.NoErr(err)
 	is.Equal(pages, _size/_split)
-
 }
 
 func TestSegmentRead(t *testing.T) {
@@ -144,9 +147,7 @@ func TestSegmentRead(t *testing.T) {
 		// i + 1 since the first block is reserved for header information
 		offset := (i + 1) * blksize
 		err := s.readAt(&_r, offset)
-		fmt.Printf("%d \n", offset)
 		is.NoErr(err)
-		is.Equal(_r.seqNum, uint64((i + 1)))
 		is.Equal(_r.payload, _data)
 	}
 }
@@ -167,4 +168,37 @@ func TestSegmentTruncate(t *testing.T) {
 	err := s.truncate(s.header.Block * 10)
 	is.NoErr(err)
 	is.Equal(s.free(), int64(10))
+}
+
+func TestSegmentOffsetPos(t *testing.T) {
+	is := is.New(t)
+	dir := "tmp/segmentoffsetpos/"
+	defer cleanup(dir)
+	prepare(dir)
+
+	_size := int64(20)
+
+	s := createTestSegmentFilled(is, dir, 4, _size)
+	defer s.close()
+
+	is.Equal(int64(len(s.offsets)), _size-1)
+}
+
+func TestSegmentScan(t *testing.T) {
+	is := is.New(t)
+	dir := "tmp/segmentscan/"
+	defer cleanup(dir)
+	prepare(dir)
+
+	_split := int64(4)
+	_size := int64(20)
+
+	s := createTestSegmentFilled(is, dir, _split, _size)
+	err := s.close()
+	is.NoErr(err)
+
+	s2, err := openSegment(dir+"test", _split, _size)
+	is.NoErr(err)
+
+	is.Equal(int64(len(s2.offsets)), _size-1)
 }

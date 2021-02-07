@@ -13,12 +13,10 @@ const (
 )
 
 var (
-	invalidChecksumErr = fmt.Errorf("invalid checksum")
+	errInvalidChecksum = fmt.Errorf("invalid checksum")
 )
 
 type record struct {
-	// seqNum is the sequence number of the record in the write ahead log
-	seqNum uint64
 	// size is the total length of the payload
 	size uint64
 	// checksum is a checksum of the payload
@@ -35,28 +33,29 @@ func (r *record) blockC(_blockSize int64) int64 {
 	return c
 }
 
+func (r *record) validMeta() bool {
+	if r.checksum == 0 || r.size == 0 {
+		return false
+	}
+	return true
+}
+
 func (r *record) marshal() (data []byte, err error) {
 	buff := bytes.Buffer{}
-
-	// sequence number
-	_, err = buff.Write(encodeUint64(r.seqNum))
-	if err != nil {
-		return nil, err
-	}
 	// size
 	_, err = buff.Write(encodeUint64(uint64(len(r.payload))))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("can't write payload size to buffer: %w", err)
 	}
 	// checksum
 	_, err = buff.Write(encodeUint64(sum(r.payload)))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("can't write payload checksum to buffer: %w", err)
 	}
 	// payload
 	_, err = buff.Write(r.payload)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("can't write payload to buffer: %w", err)
 	}
 
 	return buff.Bytes(), nil
@@ -66,10 +65,6 @@ func (r *record) unmarshal(_data []byte) error {
 	if len(_data) < recordMetadataLength {
 		return fmt.Errorf("not enough bytes")
 	}
-
-	// sequence number
-	r.seqNum = decodeUint64(_data[:recordSeqNumLength])
-	_data = _data[recordSeqNumLength:]
 
 	// size
 	r.size = decodeUint64(_data[:recordSizeLength])
@@ -87,14 +82,14 @@ func (r *record) unmarshal(_data []byte) error {
 	r.payload = _data[:size]
 
 	if !check(r.payload, r.checksum) {
-		return invalidChecksumErr
+		return errInvalidChecksum
 	}
 
 	return nil
 }
 
 func (r *record) appendPayload(_data []byte) error {
-	if r.seqNum == 0 || r.checksum == 0 || r.size == 0 {
+	if !r.validMeta() {
 		return fmt.Errorf("header not set")
 	}
 
@@ -105,7 +100,7 @@ func (r *record) appendPayload(_data []byte) error {
 	}
 
 	if !check(r.payload, r.checksum) {
-		return invalidChecksumErr
+		return errInvalidChecksum
 	}
 
 	return nil

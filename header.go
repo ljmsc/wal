@@ -28,31 +28,28 @@ type header struct {
 }
 
 func (h *header) marshal() (_raw []byte, err error) {
-
 	if h.Page%h.Block != 0 {
 		return nil, fmt.Errorf("Block must be a divider of the os block sys")
 	}
 
 	buff := bytes.Buffer{}
-	_, err = buff.Write([]byte{uint8(h.Version)})
-	if err != nil {
-		return nil, err
+	if _, err = buff.Write([]byte{uint8(h.Version)}); err != nil {
+		return nil, fmt.Errorf("can't write version to buffer: %w", err)
 	}
-	_, err = buff.Write(encodeInt64(h.Page))
-	if err != nil {
-		return nil, err
-	}
-	_, err = buff.Write(encodeInt64(h.Block))
-	if err != nil {
-		return nil, err
-	}
-	_, err = buff.Write(encodeInt64(h.Size))
-	if err != nil {
-		return nil, err
-	}
-	_raw = buff.Bytes()
 
-	return _raw, nil
+	if _, err = buff.Write(encodeInt64(h.Page)); err != nil {
+		return nil, fmt.Errorf("can't write page size to buffer: %w", err)
+	}
+
+	if _, err = buff.Write(encodeInt64(h.Block)); err != nil {
+		return nil, fmt.Errorf("can't write block size to buffer: %w", err)
+	}
+
+	if _, err = buff.Write(encodeInt64(h.Size)); err != nil {
+		return nil, fmt.Errorf("can't write segment size to buffer: %w", err)
+	}
+
+	return buff.Bytes(), nil
 }
 
 func (h *header) unmarshal(_raw []byte) error {

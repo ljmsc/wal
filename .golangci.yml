@@ -1,0 +1,33 @@
+linters:
+  enable:
+    - errorlint
+    - exhaustive
+    - exhaustivestruct
+    - exportloopref
+    - forbidigo
+    - funlen
+    - gci
+    - gochecknoinits
+    - goconst
+    - gocritic
+    - gocyclo
+    - godox
+    - gofmt
+    - goimports
+    - golint
+    - gomnd
+    - goprintffuncname
+    - gosec
+    - ifshort
+    - interfacer
+    - lll
+    - makezero
+    - maligned
+    - misspell
+    - nakedret
+    - nestif
+    - prealloc
+    - predeclared
+    - whitespace
+    - wrapcheck
+    - dogsled
