@@ -45,6 +45,7 @@ func TestRecordUnmarshal(t *testing.T) {
 
 	is.Equal(_r.size, sizeVal)
 	is.Equal(_r.checksum, checksumVal)
+	is.Equal(uint64(len(_r.payload)), _r.size)
 }
 
 func TestRecordBlockC(t *testing.T) {
