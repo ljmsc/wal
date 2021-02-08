@@ -6,10 +6,9 @@ import (
 )
 
 const (
-	recordSeqNumLength   = 8
 	recordSizeLength     = 8
 	recordChecksumLength = 8
-	recordMetadataLength = recordSeqNumLength + recordSizeLength + recordChecksumLength
+	recordMetadataLength = recordSizeLength + recordChecksumLength
 )
 
 var (
