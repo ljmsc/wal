@@ -38,9 +38,13 @@ func TestRecordUnmarshal(t *testing.T) {
 	buff.Write(encodeUint64(sizeVal))
 	buff.Write(encodeUint64(checksumVal))
 	buff.Write(payloadVal)
+	raw := buff.Bytes()
 
 	_r := record{}
-	err := _r.unmarshal(buff.Bytes())
+	err := _r.unmarshalMetadata(raw[:recordMetadataLength])
+	is.NoErr(err)
+
+	err = _r.unmarshalPayload(raw[recordMetadataLength:])
 	is.NoErr(err)
 
 	is.Equal(_r.size, sizeVal)

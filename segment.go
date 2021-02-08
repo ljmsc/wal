@@ -1,6 +1,7 @@
 package wal
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -59,10 +60,8 @@ func (s *segment) scan() error {
 			return fmt.Errorf("can't read from segment file: %w", err)
 		}
 		r := record{}
-		if err := r.unmarshal(pData); err != nil {
-			if !errors.Is(err, errInvalidChecksum) || !r.validMeta() {
-				return err
-			}
+		if err := r.unmarshalMetadata(pData); err != nil {
+			return err
 		}
 		s.offsets = append(s.offsets, offset)
 		offset += r.blockC(s.header.Block) * s.header.Block
@@ -135,17 +134,18 @@ func (s *segment) free() int64 {
 	return s.header.Size - (size / s.header.Block)
 }
 
-func (s *segment) readPage(_offset int64) ([]byte, error) {
+func (s *segment) readPage(_offset int64) ([]byte, int64, error) {
+	pDelta := _offset % s.header.Page
 	pOffset := _offset - (_offset % s.header.Page)
 
 	pData := make([]byte, s.header.Page)
 	n, err := s.file.ReadAt(pData, pOffset)
 	if err != nil {
 		if !errors.Is(err, io.EOF) || n == 0 {
-			return nil, fmt.Errorf("can't read from segment file: %w", err)
+			return nil, 0, fmt.Errorf("can't read from segment file: %w", err)
 		}
 	}
-	return pData, nil
+	return pData[pDelta:], pOffset, nil
 }
 
 // readAt reads the record from _offset
@@ -163,43 +163,76 @@ func (s *segment) readAt(_record *record, _offset int64) error {
 		return fmt.Errorf("can't read header as offsetBy")
 	}
 
-	pDelta := _offset % s.header.Page
-	pOffset := _offset - pDelta
-	pData, err := s.readPage(pOffset)
+	pData, pOffset, err := s.readPage(_offset)
 	if err != nil {
 		if errors.Is(err, io.EOF) {
 			return ErrEntryNotFound
 		}
 		return err
 	}
-	pData = pData[pDelta:]
 
-	if err := _record.unmarshal(pData); err != nil {
-		if !errors.Is(err, errInvalidChecksum) || _record.size <= (uint64(s.header.Page)-recordMetadataLength) {
+	if err := _record.unmarshalMetadata(pData[:recordMetadataLength]); err != nil {
+		return err
+	}
+	buff := bytes.NewBuffer(pData[recordMetadataLength:])
+	for {
+		if uint64(len(pData)) >= _record.size {
+			break
+		}
+		var pData []byte
+		pData, pOffset, err = s.readPage(pOffset + s.header.Page)
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				return ErrEntryNotFound
+			}
 			return err
 		}
-	}
 
-	if _record.size <= (uint64(s.header.Page) - recordMetadataLength) {
-		return nil
-	}
-
-	// more than one block
-
-	raw := make([]byte, _record.size-uint64(len(_record.payload)))
-	if n, err := s.file.ReadAt(raw, pOffset+s.header.Page); err != nil {
-		if !errors.Is(err, io.EOF) {
-			return fmt.Errorf("can't read from segment file: %w", err)
-		}
-		if n == 0 {
-			return ErrEntryNotFound
+		if _, err := buff.Write(pData); err != nil {
+			return fmt.Errorf("can't write payload to buffer: %w", err)
 		}
 	}
-	if err := _record.appendPayload(raw); err != nil {
+
+	payload := buff.Bytes()
+	if err := _record.unmarshalPayload(payload[:_record.size]); err != nil {
 		return err
 	}
 
 	return nil
+}
+
+// readFrom reads _n records starting from _offset
+func (s *segment) readFrom(_offset int64, _n int64) (<-chan envelope, error) {
+	out := make(chan envelope)
+
+	if !s.isBlock(_offset) {
+		return nil, errOffsetBlock
+	}
+
+	go func() {
+		defer close(out)
+		var pData []byte
+		pOffset := _offset
+		var _record record
+		for {
+			var err error
+			pData, pOffset, err = s.readPage(pOffset)
+			if err != nil {
+				out <- envelope{err: err}
+				return
+			}
+
+			if !_record.validMeta() {
+				if err := _record.unmarshalMetadata(pData[:recordMetadataLength]); err != nil {
+					out <- envelope{err: err}
+					return
+				}
+			}
+			pOffset += s.header.Page
+		}
+	}()
+
+	return out, nil
 }
 
 // write writes the record to the segment
