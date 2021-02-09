@@ -90,6 +90,51 @@ func TestWalRead(t *testing.T) {
 	}
 }
 
+func TestWalReadFromStart(t *testing.T) {
+	is := is.New(t)
+	dir := "tmp/walreadfromstart/"
+	defer cleanup(dir)
+	prepare(dir)
+	_size := int64(20)
+	w := createTestWalFilled(is, dir, _size)
+	defer w.Close()
+
+	out, err := w.ReadFrom(1, 40)
+	is.NoErr(err)
+
+	i := 1
+	for envelope := range out {
+		testData := []byte("this is pre filled test data: " + strconv.Itoa(i))
+		is.NoErr(envelope.err)
+		is.Equal(envelope.SeqNum, uint64(i))
+		is.Equal(string(envelope.Payload), string(testData))
+		i++
+	}
+}
+
+func TestWalReadFrom(t *testing.T) {
+	is := is.New(t)
+	dir := "tmp/walreadfrom/"
+	defer cleanup(dir)
+	prepare(dir)
+	_size := int64(20)
+	w := createTestWalFilled(is, dir, _size)
+	defer w.Close()
+
+	out, err := w.ReadFrom(10, 10)
+	is.NoErr(err)
+
+	i := 10
+	for envelope := range out {
+		testData := []byte("this is pre filled test data: " + strconv.Itoa(i))
+		is.NoErr(envelope.err)
+		is.Equal(envelope.SeqNum, uint64(i))
+		is.Equal(string(envelope.Payload), string(testData))
+		i++
+	}
+	is.Equal(i, 20)
+}
+
 func TestWalTruncate(t *testing.T) {
 	is := is.New(t)
 	dir := "tmp/waltruncate/"

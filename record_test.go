@@ -64,3 +64,21 @@ func TestRecordBlockC(t *testing.T) {
 
 	is.Equal(_r.blockC(blksize), int64(1))
 }
+
+func TestRecordIsValid(t *testing.T) {
+	is := is.New(t)
+	tr := record{
+		payload: []byte("this is test data"),
+	}
+	rawtr, err := tr.marshal()
+	is.NoErr(err)
+
+	trout := record{}
+	err = trout.unmarshalMetadata(rawtr[:recordMetadataLength])
+	is.NoErr(err)
+
+	err = trout.unmarshalPayload(rawtr[recordMetadataLength:])
+	is.NoErr(err)
+
+	is.Equal(trout.isValid(), true)
+}

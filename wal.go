@@ -13,8 +13,9 @@ import (
 var (
 	// public errors
 
-	ErrNoData        = fmt.Errorf("no data provided")
-	ErrEntryNotFound = fmt.Errorf("entry not found")
+	ErrNoData           = fmt.Errorf("no data provided")
+	ErrEntryNotFound    = fmt.Errorf("entry not found")
+	ErrSeqNumOutOfRange = fmt.Errorf("sequence number is out of range")
 
 	// internal errors
 
@@ -26,6 +27,8 @@ type Wal interface {
 	Name() string
 	// ReadAt reads the data of record with the given sequence number
 	ReadAt(_entry Entry, _seqNum uint64) error
+	// ReadFrom reads the payload of _n entries starting from _seqNum
+	ReadFrom(_seqNum uint64, _n int64) (<-chan Envelope, error)
 	// Write writes the given record on disk and returns the new sequence number
 	Write(_entry Entry) (uint64, error)
 	// Truncate dumps all records whose sequence number is greater or equal to offsetBy
@@ -179,6 +182,59 @@ func (w *wal) ReadAt(_entry Entry, _seqNum uint64) error {
 		return fmt.Errorf("can't unmarshal data: %w", err)
 	}
 	return nil
+}
+
+func (w *wal) ReadFrom(_seqNum uint64, _n int64) (<-chan Envelope, error) {
+	out := make(chan Envelope)
+
+	if _seqNum < w.first || _seqNum > w.seqNum {
+		return nil, ErrSeqNumOutOfRange
+	}
+
+	go func() {
+		defer close(out)
+		currSeqNum := _seqNum
+		for {
+			segpos, err := w.segBy(currSeqNum)
+			if err != nil {
+				if errors.Is(err, errSegmentNotFound) {
+					err = ErrEntryNotFound
+				}
+				out <- Envelope{
+					err: err,
+				}
+				return
+			}
+			seg := segpos.segment
+			offset, err := seg.offsetBy((currSeqNum - segpos.seqNum) + 1)
+			if err != nil {
+				out <- Envelope{err: err}
+				return
+			}
+			env, err := seg.readFrom(offset, _n)
+			if err != nil {
+				out <- Envelope{err: err}
+				return
+			}
+			for envelope := range env {
+				c := int64(currSeqNum - _seqNum)
+				if c >= _n || currSeqNum >= w.seqNum {
+					return
+				}
+				if envelope.err != nil {
+					out <- Envelope{err: envelope.err}
+					return
+				}
+				out <- Envelope{
+					SeqNum:  currSeqNum,
+					Payload: envelope.record.payload,
+				}
+				currSeqNum++
+			}
+		}
+	}()
+
+	return out, nil
 }
 
 // Write writes the given record on disk and returns the new sequence number
