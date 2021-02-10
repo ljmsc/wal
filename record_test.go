@@ -38,9 +38,13 @@ func TestRecordUnmarshal(t *testing.T) {
 	buff.Write(encodeUint64(sizeVal))
 	buff.Write(encodeUint64(checksumVal))
 	buff.Write(payloadVal)
+	raw := buff.Bytes()
 
 	_r := record{}
-	err := _r.unmarshal(buff.Bytes())
+	err := _r.unmarshalMetadata(raw[:recordMetadataLength])
+	is.NoErr(err)
+
+	err = _r.unmarshalPayload(raw[recordMetadataLength:])
 	is.NoErr(err)
 
 	is.Equal(_r.size, sizeVal)
@@ -59,4 +63,22 @@ func TestRecordBlockC(t *testing.T) {
 	}
 
 	is.Equal(_r.blockC(blksize), int64(1))
+}
+
+func TestRecordIsValid(t *testing.T) {
+	is := is.New(t)
+	tr := record{
+		payload: []byte("this is test data"),
+	}
+	rawtr, err := tr.marshal()
+	is.NoErr(err)
+
+	trout := record{}
+	err = trout.unmarshalMetadata(rawtr[:recordMetadataLength])
+	is.NoErr(err)
+
+	err = trout.unmarshalPayload(rawtr[recordMetadataLength:])
+	is.NoErr(err)
+
+	is.Equal(trout.isValid(), true)
 }

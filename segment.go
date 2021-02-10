@@ -1,6 +1,7 @@
 package wal
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -59,10 +60,8 @@ func (s *segment) scan() error {
 			return fmt.Errorf("can't read from segment file: %w", err)
 		}
 		r := record{}
-		if err := r.unmarshal(pData); err != nil {
-			if !errors.Is(err, errInvalidChecksum) || !r.validMeta() {
-				return err
-			}
+		if err := r.unmarshalMetadata(pData); err != nil {
+			return err
 		}
 		s.offsets = append(s.offsets, offset)
 		offset += r.blockC(s.header.Block) * s.header.Block
@@ -135,17 +134,26 @@ func (s *segment) free() int64 {
 	return s.header.Size - (size / s.header.Block)
 }
 
-func (s *segment) readPage(_offset int64) ([]byte, error) {
+func (s *segment) readPage(_pageData []byte, _offset int64) (int64, error) {
+	if _offset < s.header.Block {
+		// segment header is not part of the record data. so we skip the first block
+		_offset = s.header.Block
+	}
+	pDelta := _offset % s.header.Page
 	pOffset := _offset - (_offset % s.header.Page)
+	if int64(len(_pageData)) < (s.header.Page - pDelta) {
+		return 0, fmt.Errorf("provided byte slice to small")
+	}
 
 	pData := make([]byte, s.header.Page)
 	n, err := s.file.ReadAt(pData, pOffset)
 	if err != nil {
 		if !errors.Is(err, io.EOF) || n == 0 {
-			return nil, fmt.Errorf("can't read from segment file: %w", err)
+			return 0, fmt.Errorf("can't read from segment file: %w", err)
 		}
 	}
-	return pData, nil
+
+	return int64(copy(_pageData, pData[pDelta:n])), nil
 }
 
 // readAt reads the record from _offset
@@ -162,44 +170,109 @@ func (s *segment) readAt(_record *record, _offset int64) error {
 	if _offset == 0 {
 		return fmt.Errorf("can't read header as offsetBy")
 	}
-
-	pDelta := _offset % s.header.Page
-	pOffset := _offset - pDelta
-	pData, err := s.readPage(pOffset)
+	pData := make([]byte, s.header.Page)
+	n, err := s.readPage(pData, _offset)
 	if err != nil {
 		if errors.Is(err, io.EOF) {
 			return ErrEntryNotFound
 		}
 		return err
 	}
-	pData = pData[pDelta:]
+	pData = pData[:n]
 
-	if err := _record.unmarshal(pData); err != nil {
-		if !errors.Is(err, errInvalidChecksum) || _record.size <= (uint64(s.header.Page)-recordMetadataLength) {
+	if err := _record.unmarshalMetadata(pData[:recordMetadataLength]); err != nil {
+		return err
+	}
+	buff := bytes.NewBuffer(pData[recordMetadataLength:])
+	for {
+		if uint64(buff.Len()) >= _record.size {
+			break
+		}
+		pData := make([]byte, s.header.Page)
+		n, err = s.readPage(pData, _offset+n+s.header.Page)
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				return ErrEntryNotFound
+			}
 			return err
 		}
-	}
+		pData = pData[:n]
 
-	if _record.size <= (uint64(s.header.Page) - recordMetadataLength) {
-		return nil
-	}
-
-	// more than one block
-
-	raw := make([]byte, _record.size-uint64(len(_record.payload)))
-	if n, err := s.file.ReadAt(raw, pOffset+s.header.Page); err != nil {
-		if !errors.Is(err, io.EOF) {
-			return fmt.Errorf("can't read from segment file: %w", err)
-		}
-		if n == 0 {
-			return ErrEntryNotFound
+		if _, err := buff.Write(pData); err != nil {
+			return fmt.Errorf("can't write payload to buffer: %w", err)
 		}
 	}
-	if err := _record.appendPayload(raw); err != nil {
+
+	payload := buff.Bytes()
+	if err := _record.unmarshalPayload(payload[:_record.size]); err != nil {
 		return err
 	}
 
 	return nil
+}
+
+// readFrom reads _n records starting from _offset
+func (s *segment) readFrom(_offset int64, _n int64) (<-chan envelope, error) {
+	out := make(chan envelope)
+	if _offset < s.header.Block {
+		// segment header is not part of the record data. so we skip the first block
+		_offset = s.header.Block
+	}
+
+	if !s.isBlock(_offset) {
+		return nil, errOffsetBlock
+	}
+
+	go func() {
+		defer close(out)
+
+		var outc int64
+		rp := createRecordParser(s.header.Block)
+		nextOffset := _offset
+		var chunk []byte
+		for {
+			if outc >= _n {
+				return
+			}
+			complete, err := rp.check()
+			if err != nil {
+				out <- envelope{err: err}
+				return
+			}
+			if !complete {
+				chunk = make([]byte, s.header.Page)
+				n, err := s.readPage(chunk, nextOffset)
+				if err != nil {
+					if errors.Is(err, io.EOF) {
+						return
+					}
+					out <- envelope{err: err}
+					return
+				}
+				chunk = chunk[:n]
+				if err := rp.write(chunk); err != nil {
+					out <- envelope{err: err}
+					return
+				}
+				nextOffset += n
+				continue
+			}
+
+			r := record{}
+			parsOffset, err := rp.read(&r)
+			if err != nil {
+				out <- envelope{err: err}
+				return
+			}
+			out <- envelope{
+				offset: parsOffset + _offset,
+				record: r,
+			}
+			outc++
+		}
+	}()
+
+	return out, nil
 }
 
 // write writes the record to the segment

@@ -13,6 +13,7 @@ const (
 
 var (
 	errInvalidChecksum = fmt.Errorf("invalid checksum")
+	errInvalidMetadata = fmt.Errorf("invalid metadata")
 )
 
 type record struct {
@@ -32,10 +33,22 @@ func (r *record) blockC(_blockSize int64) int64 {
 	return c
 }
 
-func (r *record) validMeta() bool {
+func (r *record) isMetaValid() bool {
 	if r.checksum == 0 || r.size == 0 {
 		return false
 	}
+	return true
+}
+
+func (r *record) isValid() bool {
+	if !r.isMetaValid() {
+		return false
+	}
+
+	if uint64(len(r.payload)) != r.size {
+		return false
+	}
+
 	return true
 }
 
@@ -60,7 +73,7 @@ func (r *record) marshal() (data []byte, err error) {
 	return buff.Bytes(), nil
 }
 
-func (r *record) unmarshal(_data []byte) error {
+func (r *record) unmarshalMetadata(_data []byte) error {
 	if len(_data) < recordMetadataLength {
 		return fmt.Errorf("not enough bytes")
 	}
@@ -71,32 +84,24 @@ func (r *record) unmarshal(_data []byte) error {
 
 	// checksum
 	r.checksum = decodeUint64(_data[:recordChecksumLength])
-	_data = _data[recordChecksumLength:]
 
-	// payload
-	size := r.size
-	if uint64(len(_data)) < r.size {
-		size = uint64(len(_data))
-	}
-	r.payload = _data[:size]
-
-	if !check(r.payload, r.checksum) {
-		return errInvalidChecksum
+	if !r.isMetaValid() {
+		return errInvalidMetadata
 	}
 
 	return nil
 }
 
-func (r *record) appendPayload(_data []byte) error {
-	if !r.validMeta() {
-		return fmt.Errorf("header not set")
+func (r *record) unmarshalPayload(_data []byte) error {
+	if !r.isMetaValid() {
+		return errInvalidMetadata
 	}
 
-	r.payload = append(r.payload, _data...)
-
-	if uint64(len(r.payload)) != r.size {
-		return fmt.Errorf("payload size missmatch")
+	if uint64(len(_data)) < r.size {
+		return fmt.Errorf("not enough bytes")
 	}
+
+	r.payload = _data[:r.size]
 
 	if !check(r.payload, r.checksum) {
 		return errInvalidChecksum

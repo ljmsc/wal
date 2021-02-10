@@ -2,7 +2,6 @@ linters:
   enable:
     - errorlint
     - exhaustive
-    - exhaustivestruct
     - exportloopref
     - forbidigo
     - funlen

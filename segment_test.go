@@ -152,6 +152,70 @@ func TestSegmentRead(t *testing.T) {
 	}
 }
 
+func TestSegmentReadFromStart(t *testing.T) {
+	is := is.New(t)
+	dir := "tmp/segmentreadfromstart/"
+	defer cleanup(dir)
+	prepare(dir)
+
+	_size := int64(20)
+	_split := int64(4)
+	_page, _ := pageSizefs(dir)
+	blksize := _page / _split
+
+	s := createTestSegmentFilled(is, dir, _split, _size)
+	defer s.close()
+
+	out, err := s.readFrom(0, 10)
+	is.NoErr(err)
+	i := 0
+	for envelope := range out {
+		testData := []byte("this is my awesome test data " + strconv.Itoa(i))
+		is.NoErr(envelope.err)
+		is.True(envelope.offset > 0)
+		is.Equal(envelope.offset%blksize, int64(0))
+		is.True(envelope.record.isMetaValid())
+		is.True(check(envelope.record.payload, envelope.record.checksum))
+		is.Equal(string(envelope.record.payload), string(testData))
+		r := record{}
+		err := s.readAt(&r, envelope.offset)
+		is.NoErr(err)
+		i++
+	}
+}
+
+func TestSegmentReadFrom(t *testing.T) {
+	is := is.New(t)
+	dir := "tmp/segmentreadfrom/"
+	defer cleanup(dir)
+	prepare(dir)
+
+	_size := int64(20)
+	_split := int64(4)
+	_page, _ := pageSizefs(dir)
+	blksize := _page / _split
+
+	s := createTestSegmentFilled(is, dir, _split, _size)
+	defer s.close()
+
+	out, err := s.readFrom(4096, 10)
+	is.NoErr(err)
+	i := 3
+	for envelope := range out {
+		testData := []byte("this is my awesome test data " + strconv.Itoa(i))
+		is.NoErr(envelope.err)
+		is.True(envelope.offset > 0)
+		is.Equal(envelope.offset%blksize, int64(0))
+		is.True(envelope.record.isMetaValid())
+		is.True(check(envelope.record.payload, envelope.record.checksum))
+		is.Equal(string(envelope.record.payload), string(testData))
+		r := record{}
+		err := s.readAt(&r, envelope.offset)
+		is.NoErr(err)
+		i++
+	}
+}
+
 func TestSegmentTruncate(t *testing.T) {
 	is := is.New(t)
 	dir := "tmp/segmenttruncate/"
