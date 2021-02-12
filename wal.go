@@ -30,7 +30,7 @@ type Wal interface {
 	// ReadFrom reads the payload of _n entries starting from _seqNum
 	ReadFrom(_seqNum uint64, _n int64) (<-chan Envelope, error)
 	// Write writes the given record on disk and returns the new sequence number
-	Write(_entry Entry) (uint64, error)
+	Write(_data []byte) (uint64, error)
 	// Truncate dumps all records whose sequence number is greater or equal to offsetBy
 	Truncate(_seqNum uint64) error
 	// First returns the first sequence number in the write ahead log
@@ -200,9 +200,7 @@ func (w *wal) ReadFrom(_seqNum uint64, _n int64) (<-chan Envelope, error) {
 				if errors.Is(err, errSegmentNotFound) {
 					err = ErrEntryNotFound
 				}
-				out <- Envelope{
-					err: err,
-				}
+				out <- Envelope{err: err}
 				return
 			}
 			seg := segpos.segment
@@ -238,20 +236,14 @@ func (w *wal) ReadFrom(_seqNum uint64, _n int64) (<-chan Envelope, error) {
 }
 
 // Write writes the given record on disk and returns the new sequence number
-func (w *wal) Write(_entry Entry) (uint64, error) {
-	raw, err := _entry.Marshal()
-	if err != nil {
-		return 0, fmt.Errorf("can't marshal data: %w", err)
-	}
-
+func (w *wal) Write(_data []byte) (uint64, error) {
 	// check is data is available
-	if len(raw) == 0 {
+	if len(_data) == 0 {
 		return 0, ErrNoData
 	}
 
-	_r := record{
-		payload: raw,
-	}
+	_r := record{payload: _data}
+
 	for {
 		seg, err := w.seg()
 		if err != nil {
