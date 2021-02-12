@@ -25,7 +25,9 @@ var (
 type Wal interface {
 	// Name returns the name of the write ahead log
 	Name() string
-	// ReadAt reads the data of record with the given sequence number
+	// Read reads the data of the entry with the given sequence number and returns it
+	Read(_seqNum uint64) ([]byte, error)
+	// ReadAt reads the data of the entry with the given sequence number to _entry
 	ReadAt(_entry Entry, _seqNum uint64) error
 	// ReadFrom reads the payload of _n entries starting from _seqNum
 	ReadFrom(_seqNum uint64, _n int64) (<-chan Envelope, error)
@@ -158,27 +160,37 @@ func (w *wal) Name() string {
 	return w.name
 }
 
-// ReadAt reads the data of record with the given sequence number
-func (w *wal) ReadAt(_entry Entry, _seqNum uint64) error {
+// Read reads the data of the entry with the given sequence number and returns it
+func (w *wal) Read(_seqNum uint64) ([]byte, error) {
 	segpos, err := w.segBy(_seqNum)
 	if err != nil {
 		if errors.Is(err, errSegmentNotFound) {
-			return ErrEntryNotFound
+			return nil, ErrEntryNotFound
 		}
-		return err
+		return nil, err
 	}
 	seg := segpos.segment
 	offset, err := seg.offsetBy((_seqNum - segpos.seqNum) + 1)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	_r := record{}
 	if err := seg.readAt(&_r, offset); err != nil {
+		return nil, err
+	}
+
+	return _r.payload, nil
+}
+
+// ReadAt reads the data of the entry with the given sequence number to _entry
+func (w *wal) ReadAt(_entry Entry, _seqNum uint64) error {
+	payload, err := w.Read(_seqNum)
+	if err != nil {
 		return err
 	}
 
-	if err := _entry.Unmarshal(_r.payload); err != nil {
+	if err := _entry.Unmarshal(payload); err != nil {
 		return fmt.Errorf("can't unmarshal data: %w", err)
 	}
 	return nil

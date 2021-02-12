@@ -28,8 +28,8 @@ func createTestWalFilled(is *is.I, _dir string, _size int64) Wal {
 	w := createTestWal(is, _dir, 4, _size)
 
 	for i := int64(0); i < _size*2; i++ {
-		e := testEntry("this is pre filled test data: " + strconv.FormatInt(i+1, 10))
-		_, err := w.Write(&e)
+		e := []byte("this is pre filled test data: " + strconv.FormatInt(i+1, 10))
+		_, err := w.Write(e)
 		is.NoErr(err)
 	}
 
@@ -62,8 +62,8 @@ func TestWalWrite(t *testing.T) {
 	defer w.Close()
 
 	for i := int64(0); i < _size; i++ {
-		e := testEntry("this is test data: " + strconv.FormatInt(i+1, 10))
-		seqNum, err := w.Write(&e)
+		e := []byte("this is test data: " + strconv.FormatInt(i+1, 10))
+		seqNum, err := w.Write(e)
 		is.NoErr(err)
 		is.True(seqNum > 0)
 		is.Equal(seqNum, uint64(i+1))
@@ -72,7 +72,7 @@ func TestWalWrite(t *testing.T) {
 	is.Equal(w.SeqNum(), uint64(_size))
 }
 
-func TestWalRead(t *testing.T) {
+func TestWalReadAt(t *testing.T) {
 	is := is.New(t)
 	dir := "tmp/walread/"
 	defer cleanup(dir)
