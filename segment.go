@@ -17,6 +17,8 @@ type segment struct {
 	file    *os.File
 	header  header
 	offsets []int64
+	// safe is the last written offset which is flushed/synced to persistent storage
+	safe int64
 }
 
 func openSegment(_name string, _split int64, _size int64) (*segment, error) {
@@ -46,6 +48,7 @@ func openSegment(_name string, _split int64, _size int64) (*segment, error) {
 	if err := s.scan(); err != nil {
 		return nil, err
 	}
+
 	return &s, nil
 }
 
@@ -65,6 +68,11 @@ func (s *segment) scan() error {
 		}
 		s.offsets = append(s.offsets, offset)
 		offset += r.blockC(s.header.Block) * s.header.Block
+	}
+
+	if len(s.offsets) > 0 {
+		// last offset in the list is the "safe" offset
+		s.safe = s.offsets[len(s.offsets)-1]
 	}
 
 	return nil
@@ -312,7 +320,15 @@ func (s *segment) write(_record record) (int64, error) {
 
 // sync syncs the written data to disk
 func (s *segment) sync() error {
-	return s.file.Sync()
+	if err := s.file.Sync(); err != nil {
+		return fmt.Errorf("can't sync data to disk: %w", err)
+	}
+
+	if len(s.offsets) > 0 {
+		s.safe = s.offsets[len(s.offsets)-1]
+	}
+
+	return nil
 }
 
 // offsetBy returns the offsetBy of the record on position _pos. _pos must be > 0
@@ -332,7 +348,10 @@ func (s *segment) truncate(_offset int64) error {
 	if !s.isBlock(_offset) {
 		return errOffsetBlock
 	}
-	return s.file.Truncate(_offset)
+	if err := s.file.Truncate(_offset); err != nil {
+		return fmt.Errorf("can't truncate segment: %w", err)
+	}
+	return s.sync()
 }
 
 // close closes the segment file

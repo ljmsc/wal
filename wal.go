@@ -35,10 +35,14 @@ type Wal interface {
 	Write(_data []byte) (uint64, error)
 	// Truncate dumps all records whose sequence number is greater or equal to offsetBy
 	Truncate(_seqNum uint64) error
+	// Sync flushes changes to persistent storage and returns the latest safe sequence number
+	Sync() (uint64, error)
 	// First returns the first sequence number in the write ahead log
 	First() uint64
 	// SeqNum returns the latest written sequence number in the write ahead log
 	SeqNum() uint64
+	// Safe returns the latest safe sequence number
+	Safe() uint64
 	// Close closes the write ahead log and all segment files
 	Close() error
 }
@@ -113,6 +117,12 @@ func (w *wal) scan() error {
 			first = false
 		}
 	}
+
+	if len(w.segments) > 0 {
+		segpos := w.segments[len(w.segments)-1]
+		w.seqNum = segpos.seqNum + uint64(len(segpos.segment.offsets)-1)
+	}
+
 	return nil
 }
 
@@ -270,6 +280,10 @@ func (w *wal) Write(_data []byte) (uint64, error) {
 		if !errors.Is(err, errMaxSize) {
 			return 0, fmt.Errorf("couldn't write entry: %w", err)
 		}
+		// sync open changes to disk before opening a new segment
+		if err := seg.sync(); err != nil {
+			return 0, err
+		}
 		err = w.segAdd()
 		if err != nil {
 			return 0, fmt.Errorf("no segment available: %w", err)
@@ -301,12 +315,40 @@ func (w *wal) Truncate(_seqNum uint64) error {
 	return nil
 }
 
+func (w *wal) Sync() (uint64, error) {
+	seg, err := w.seg()
+	if err != nil {
+		return 0, err
+	}
+	if err := seg.sync(); err != nil {
+		return 0, err
+	}
+
+	return w.seqNum, nil
+}
+
 func (w *wal) First() uint64 {
 	return w.first
 }
 
 func (w *wal) SeqNum() uint64 {
 	return w.seqNum
+}
+
+func (w *wal) Safe() uint64 {
+	if len(w.segments) == 0 {
+		return 0
+	}
+
+	segpos := w.segments[len(w.segments)-1]
+	seg := segpos.segment
+	for i, offset := range seg.offsets {
+		if offset != seg.safe {
+			continue
+		}
+		return segpos.seqNum + uint64(i)
+	}
+	return segpos.seqNum - 1
 }
 
 func (w *wal) Close() error {

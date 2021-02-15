@@ -72,6 +72,23 @@ func TestWalWrite(t *testing.T) {
 	is.Equal(w.SeqNum(), uint64(_size))
 }
 
+func TestWalSync(t *testing.T) {
+	is := is.New(t)
+	dir := "tmp/walsync/"
+	defer cleanup(dir)
+	prepare(dir)
+	_size := int64(20)
+	w := createTestWalFilled(is, dir, _size)
+	defer w.Close()
+
+	seqNum, err := w.Sync()
+	is.NoErr(err)
+	is.Equal(seqNum, uint64(40))
+
+	safeSeqNum := w.Safe()
+	is.Equal(safeSeqNum, uint64(40))
+}
+
 func TestWalReadAt(t *testing.T) {
 	is := is.New(t)
 	dir := "tmp/walread/"
@@ -177,5 +194,27 @@ func TestWalReopen(t *testing.T) {
 		err := wRe.ReadAt(&e, uint64(i+1))
 		is.NoErr(err)
 		is.Equal([]byte(e), testData)
+	}
+}
+
+func TestWalReopenWrite(t *testing.T) {
+	is := is.New(t)
+	dir := "tmp/walreopenwrite/"
+	defer cleanup(dir)
+	prepare(dir)
+	_size := int64(20)
+	w := createTestWalFilled(is, dir, _size)
+	err := w.Close()
+	is.NoErr(err)
+
+	wRe, err := Open(dir+"test", 4, _size)
+	is.NoErr(err)
+	defer wRe.Close()
+
+	for i := int64(1); i <= 5; i++ {
+		data := []byte("this is pre filled test data: " + strconv.FormatInt(i+1, 10))
+		seqNum, err := wRe.Write(data)
+		is.NoErr(err)
+		is.Equal(seqNum, uint64(i+40))
 	}
 }
