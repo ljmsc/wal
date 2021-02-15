@@ -25,18 +25,24 @@ var (
 type Wal interface {
 	// Name returns the name of the write ahead log
 	Name() string
-	// ReadAt reads the data of record with the given sequence number
+	// Read reads the data of the entry with the given sequence number and returns it
+	Read(_seqNum uint64) ([]byte, error)
+	// ReadAt reads the data of the entry with the given sequence number to _entry
 	ReadAt(_entry Entry, _seqNum uint64) error
 	// ReadFrom reads the payload of _n entries starting from _seqNum
 	ReadFrom(_seqNum uint64, _n int64) (<-chan Envelope, error)
 	// Write writes the given record on disk and returns the new sequence number
-	Write(_entry Entry) (uint64, error)
+	Write(_data []byte) (uint64, error)
 	// Truncate dumps all records whose sequence number is greater or equal to offsetBy
 	Truncate(_seqNum uint64) error
+	// Sync flushes changes to persistent storage and returns the latest safe sequence number
+	Sync() (uint64, error)
 	// First returns the first sequence number in the write ahead log
 	First() uint64
 	// SeqNum returns the latest written sequence number in the write ahead log
 	SeqNum() uint64
+	// Safe returns the latest safe sequence number
+	Safe() uint64
 	// Close closes the write ahead log and all segment files
 	Close() error
 }
@@ -111,6 +117,12 @@ func (w *wal) scan() error {
 			first = false
 		}
 	}
+
+	if len(w.segments) > 0 {
+		segpos := w.segments[len(w.segments)-1]
+		w.seqNum = segpos.seqNum + uint64(len(segpos.segment.offsets)-1)
+	}
+
 	return nil
 }
 
@@ -158,27 +170,37 @@ func (w *wal) Name() string {
 	return w.name
 }
 
-// ReadAt reads the data of record with the given sequence number
-func (w *wal) ReadAt(_entry Entry, _seqNum uint64) error {
+// Read reads the data of the entry with the given sequence number and returns it
+func (w *wal) Read(_seqNum uint64) ([]byte, error) {
 	segpos, err := w.segBy(_seqNum)
 	if err != nil {
 		if errors.Is(err, errSegmentNotFound) {
-			return ErrEntryNotFound
+			return nil, ErrEntryNotFound
 		}
-		return err
+		return nil, err
 	}
 	seg := segpos.segment
 	offset, err := seg.offsetBy((_seqNum - segpos.seqNum) + 1)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	_r := record{}
 	if err := seg.readAt(&_r, offset); err != nil {
+		return nil, err
+	}
+
+	return _r.payload, nil
+}
+
+// ReadAt reads the data of the entry with the given sequence number to _entry
+func (w *wal) ReadAt(_entry Entry, _seqNum uint64) error {
+	payload, err := w.Read(_seqNum)
+	if err != nil {
 		return err
 	}
 
-	if err := _entry.Unmarshal(_r.payload); err != nil {
+	if err := _entry.Unmarshal(payload); err != nil {
 		return fmt.Errorf("can't unmarshal data: %w", err)
 	}
 	return nil
@@ -200,9 +222,7 @@ func (w *wal) ReadFrom(_seqNum uint64, _n int64) (<-chan Envelope, error) {
 				if errors.Is(err, errSegmentNotFound) {
 					err = ErrEntryNotFound
 				}
-				out <- Envelope{
-					err: err,
-				}
+				out <- Envelope{err: err}
 				return
 			}
 			seg := segpos.segment
@@ -238,20 +258,14 @@ func (w *wal) ReadFrom(_seqNum uint64, _n int64) (<-chan Envelope, error) {
 }
 
 // Write writes the given record on disk and returns the new sequence number
-func (w *wal) Write(_entry Entry) (uint64, error) {
-	raw, err := _entry.Marshal()
-	if err != nil {
-		return 0, fmt.Errorf("can't marshal data: %w", err)
-	}
-
+func (w *wal) Write(_data []byte) (uint64, error) {
 	// check is data is available
-	if len(raw) == 0 {
+	if len(_data) == 0 {
 		return 0, ErrNoData
 	}
 
-	_r := record{
-		payload: raw,
-	}
+	_r := record{payload: _data}
+
 	for {
 		seg, err := w.seg()
 		if err != nil {
@@ -265,6 +279,10 @@ func (w *wal) Write(_entry Entry) (uint64, error) {
 		}
 		if !errors.Is(err, errMaxSize) {
 			return 0, fmt.Errorf("couldn't write entry: %w", err)
+		}
+		// sync open changes to disk before opening a new segment
+		if err := seg.sync(); err != nil {
+			return 0, err
 		}
 		err = w.segAdd()
 		if err != nil {
@@ -297,12 +315,40 @@ func (w *wal) Truncate(_seqNum uint64) error {
 	return nil
 }
 
+func (w *wal) Sync() (uint64, error) {
+	seg, err := w.seg()
+	if err != nil {
+		return 0, err
+	}
+	if err := seg.sync(); err != nil {
+		return 0, err
+	}
+
+	return w.seqNum, nil
+}
+
 func (w *wal) First() uint64 {
 	return w.first
 }
 
 func (w *wal) SeqNum() uint64 {
 	return w.seqNum
+}
+
+func (w *wal) Safe() uint64 {
+	if len(w.segments) == 0 {
+		return 0
+	}
+
+	segpos := w.segments[len(w.segments)-1]
+	seg := segpos.segment
+	for i, offset := range seg.offsets {
+		if offset != seg.safe {
+			continue
+		}
+		return segpos.seqNum + uint64(i)
+	}
+	return segpos.seqNum - 1
 }
 
 func (w *wal) Close() error {

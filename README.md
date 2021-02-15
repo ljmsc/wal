@@ -29,10 +29,6 @@ import (
 
 type entry []byte
 
-func (t *entry) Marshal() ([]byte, error) {
-	return *t, nil
-}
-
 func (t *entry) Unmarshal(_data []byte) error {
 	*t = _data
 	return nil
@@ -46,8 +42,8 @@ func main() {
 	}
 	defer storage.Close()
 
-	we := entry("this is my awesome test data")
-	seqNum, err := storage.Write(&we)
+	data := []byte("this is my awesome test data")
+	seqNum, err := storage.Write(data)
 	if err != nil {
 		// handle write error
 		panic(err)
