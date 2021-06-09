@@ -9,5 +9,5 @@ type envelope struct {
 type Envelope struct {
 	SeqNum  uint64
 	Payload []byte
-	err     error
+	Err     error
 }

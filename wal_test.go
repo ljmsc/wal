@@ -122,7 +122,7 @@ func TestWalReadFromStart(t *testing.T) {
 	i := 1
 	for envelope := range out {
 		testData := []byte("this is pre filled test data: " + strconv.Itoa(i))
-		is.NoErr(envelope.err)
+		is.NoErr(envelope.Err)
 		is.Equal(envelope.SeqNum, uint64(i))
 		is.Equal(string(envelope.Payload), string(testData))
 		i++
@@ -144,7 +144,7 @@ func TestWalReadFrom(t *testing.T) {
 	i := 10
 	for envelope := range out {
 		testData := []byte("this is pre filled test data: " + strconv.Itoa(i))
-		is.NoErr(envelope.err)
+		is.NoErr(envelope.Err)
 		is.Equal(envelope.SeqNum, uint64(i))
 		is.Equal(string(envelope.Payload), string(testData))
 		i++

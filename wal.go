@@ -52,7 +52,7 @@ type wal struct {
 	name string
 	// split defines in how many chunks a single filesystem block should be divided
 	split int64
-	// size is the max size of blocks which should be written to a single segment file
+	// size is the max amount of blocks which should be written to a single segment file
 	size int64
 	// first is the first sequence number in the write ahead log
 	first uint64
@@ -63,10 +63,12 @@ type wal struct {
 }
 
 // Open opens or creates a write ahead log.
-func Open(_name string, _segSplit int64, _segSize int64) (Wal, error) {
+// _segBlockN is the amount of records which can be written to a single filesystem page
+// _segSize is the amount of records which can be written to the segment file
+func Open(_name string, _segBlockN int64, _segSize int64) (Wal, error) {
 	w := wal{
 		name:     _name,
-		split:    _segSplit,
+		split:    _segBlockN,
 		size:     _segSize,
 		first:    1,
 		seqNum:   0,
@@ -222,18 +224,18 @@ func (w *wal) ReadFrom(_seqNum uint64, _n int64) (<-chan Envelope, error) {
 				if errors.Is(err, errSegmentNotFound) {
 					err = ErrEntryNotFound
 				}
-				out <- Envelope{err: err}
+				out <- Envelope{Err: err}
 				return
 			}
 			seg := segpos.segment
 			offset, err := seg.offsetBy((currSeqNum - segpos.seqNum) + 1)
 			if err != nil {
-				out <- Envelope{err: err}
+				out <- Envelope{Err: err}
 				return
 			}
 			env, err := seg.readFrom(offset, _n)
 			if err != nil {
-				out <- Envelope{err: err}
+				out <- Envelope{Err: err}
 				return
 			}
 			for envelope := range env {
@@ -242,7 +244,7 @@ func (w *wal) ReadFrom(_seqNum uint64, _n int64) (<-chan Envelope, error) {
 					return
 				}
 				if envelope.err != nil {
-					out <- Envelope{err: envelope.err}
+					out <- Envelope{Err: envelope.err}
 					return
 				}
 				out <- Envelope{

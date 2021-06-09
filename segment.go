@@ -95,7 +95,7 @@ func (s *segment) writeHeader(_split int64, _size int64) error {
 		return err
 	}
 	if (ps % _split) != 0 {
-		return fmt.Errorf("_split must be a divider of the os block sys")
+		return fmt.Errorf("_split must be a divider of the os block size")
 	}
 
 	blksize := ps / _split
