@@ -107,6 +107,7 @@ func TestSegmentWrite(t *testing.T) {
 	segSize, err := s.size()
 	is.NoErr(err)
 	is.Equal(segSize, _size*(ps/_split))
+	is.Equal(_size-1, int64(len(s.offsets)))
 }
 
 func TestSegmentBlockCount(t *testing.T) {
@@ -201,6 +202,40 @@ func TestSegmentReadFrom(t *testing.T) {
 	out, err := s.readFrom(4096, 10)
 	is.NoErr(err)
 	i := 3
+	for envelope := range out {
+		testData := []byte("this is my awesome test data " + strconv.Itoa(i))
+		is.NoErr(envelope.err)
+		is.True(envelope.offset > 0)
+		is.Equal(envelope.offset%blksize, int64(0))
+		is.True(envelope.record.isMetaValid())
+		is.True(check(envelope.record.payload, envelope.record.checksum))
+		is.Equal(string(envelope.record.payload), string(testData))
+		r := record{}
+		err := s.readAt(&r, envelope.offset)
+		is.NoErr(err)
+		i++
+	}
+}
+
+func TestSegmentReadFrom2(t *testing.T) {
+	is := is.New(t)
+	dir := "tmp/segmentreadfrom2/"
+	defer cleanup(dir)
+	prepare(dir)
+
+	_size := int64(5)
+	_split := int64(4)
+	_page, _ := pageSizefs(dir)
+	blksize := _page / _split
+
+	s := createTestSegmentFilled(is, dir, _split, _size)
+	defer s.close()
+
+	is.Equal(_size-1, int64(len(s.offsets)))
+
+	out, err := s.readFrom(0, 5)
+	is.NoErr(err)
+	i := 0
 	for envelope := range out {
 		testData := []byte("this is my awesome test data " + strconv.Itoa(i))
 		is.NoErr(envelope.err)

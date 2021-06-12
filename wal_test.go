@@ -112,13 +112,12 @@ func TestWalReadFromStart(t *testing.T) {
 	dir := "tmp/walreadfromstart/"
 	defer cleanup(dir)
 	prepare(dir)
-	_size := int64(20)
+	_size := int64(5)
 	w := createTestWalFilled(is, dir, _size)
 	defer w.Close()
 
-	out, err := w.ReadFrom(1, 40)
+	out, err := w.ReadFrom(1, 10)
 	is.NoErr(err)
-
 	i := 1
 	for envelope := range out {
 		testData := []byte("this is pre filled test data: " + strconv.Itoa(i))
@@ -127,6 +126,7 @@ func TestWalReadFromStart(t *testing.T) {
 		is.Equal(string(envelope.Payload), string(testData))
 		i++
 	}
+	is.Equal(10, i-1)
 }
 
 func TestWalReadFrom(t *testing.T) {

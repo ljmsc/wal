@@ -208,6 +208,7 @@ func (w *wal) ReadAt(_entry Entry, _seqNum uint64) error {
 	return nil
 }
 
+// ReadFrom reads the payload of _n entries starting from _seqNum
 func (w *wal) ReadFrom(_seqNum uint64, _n int64) (<-chan Envelope, error) {
 	out := make(chan Envelope)
 
@@ -218,7 +219,17 @@ func (w *wal) ReadFrom(_seqNum uint64, _n int64) (<-chan Envelope, error) {
 	go func() {
 		defer close(out)
 		currSeqNum := _seqNum
+		// sendN counts the elements which are already send via the out channel
+		var sendN int64
 		for {
+			// return if the next seqNum is larger than the last one written
+			if currSeqNum > w.seqNum {
+				return
+			}
+			// return if _n elements are send via the channel
+			if sendN >= _n {
+				return
+			}
 			segpos, err := w.segBy(currSeqNum)
 			if err != nil {
 				if errors.Is(err, errSegmentNotFound) {
@@ -240,7 +251,7 @@ func (w *wal) ReadFrom(_seqNum uint64, _n int64) (<-chan Envelope, error) {
 			}
 			for envelope := range env {
 				c := int64(currSeqNum - _seqNum)
-				if c >= _n || currSeqNum >= w.seqNum {
+				if c >= _n || currSeqNum > w.seqNum {
 					return
 				}
 				if envelope.err != nil {
@@ -251,6 +262,7 @@ func (w *wal) ReadFrom(_seqNum uint64, _n int64) (<-chan Envelope, error) {
 					SeqNum:  currSeqNum,
 					Payload: envelope.record.payload,
 				}
+				sendN++
 				currSeqNum++
 			}
 		}
