@@ -30,3 +30,7 @@ linters:
     - whitespace
     - wrapcheck
     - dogsled
+linters-settings:
+  funlen:
+    lines: 100
+    statements: 50
