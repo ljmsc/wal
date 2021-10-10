@@ -1,6 +1,7 @@
 package wal
 
 import (
+	"encoding"
 	"errors"
 	"fmt"
 	"io/ioutil"
@@ -28,11 +29,16 @@ type Wal interface {
 	// Read reads the data of the entry with the given sequence number and returns it
 	Read(_seqNum uint64) ([]byte, error)
 	// ReadAt reads the data of the entry with the given sequence number to _entry
+	// Deprecated
 	ReadAt(_entry Entry, _seqNum uint64) error
+	// ReadTo reads the data of the entry with the given sequence number to _entry
+	ReadTo(_entry encoding.BinaryUnmarshaler, _seqNum uint64) error
 	// ReadFrom reads the payload of _n entries starting from _seqNum
 	ReadFrom(_seqNum uint64, _n int64) (<-chan Envelope, error)
-	// Write writes the given record on disk and returns the new sequence number
+	// Write writes the given data on disk and returns the new sequence number
 	Write(_data []byte) (uint64, error)
+	// WriteFrom extracts data from the given object and writes it on disk. it returns the new sequence number
+	WriteFrom(r encoding.BinaryMarshaler) (uint64, error)
 	// Truncate dumps all records whose sequence number is greater or equal to offsetBy
 	Truncate(_seqNum uint64) error
 	// Sync flushes changes to persistent storage and returns the latest safe sequence number
@@ -196,6 +202,7 @@ func (w *wal) Read(_seqNum uint64) ([]byte, error) {
 }
 
 // ReadAt reads the data of the entry with the given sequence number to _entry
+// Deprecated
 func (w *wal) ReadAt(_entry Entry, _seqNum uint64) error {
 	payload, err := w.Read(_seqNum)
 	if err != nil {
@@ -203,6 +210,19 @@ func (w *wal) ReadAt(_entry Entry, _seqNum uint64) error {
 	}
 
 	if err := _entry.Unmarshal(payload); err != nil {
+		return fmt.Errorf("can't unmarshal data: %w", err)
+	}
+	return nil
+}
+
+// ReadTo reads the data of the entry with the given sequence number to _entry
+func (w *wal) ReadTo(_entry encoding.BinaryUnmarshaler, _seqNum uint64) error {
+	payload, err := w.Read(_seqNum)
+	if err != nil {
+		return err
+	}
+
+	if err := _entry.UnmarshalBinary(payload); err != nil {
 		return fmt.Errorf("can't unmarshal data: %w", err)
 	}
 	return nil
@@ -306,6 +326,16 @@ func (w *wal) Write(_data []byte) (uint64, error) {
 
 	w.seqNum++
 	return w.seqNum, nil
+}
+
+// WriteFrom extracts data from the given object and writes it on disk. it returns the new sequence number
+func (w *wal) WriteFrom(r encoding.BinaryMarshaler) (uint64, error) {
+	data, err := r.MarshalBinary()
+	if err != nil {
+		return 0, fmt.Errorf("can't marshal data: %w", err)
+	}
+
+	return w.Write(data)
 }
 
 func (w *wal) Truncate(_seqNum uint64) error {

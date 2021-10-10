@@ -23,7 +23,7 @@ type header struct {
 	Page int64
 	// Block is the size of each record block on disk in bytes. (8 byte)
 	Block int64
-	// Size is the amount of records which can be written to the segment file (8 byte)
+	// Size is the amount of blocks which can be written to the segment file (8 byte)
 	Size int64
 }
 
