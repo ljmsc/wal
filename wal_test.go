@@ -175,6 +175,8 @@ func TestWalTruncate(t *testing.T) {
 
 	err = w.ReadAt(&e2, truncSeqNum-1)
 	is.NoErr(err)
+
+	is.Equal(truncSeqNum-1, w.SeqNum())
 }
 
 func TestWalReopen(t *testing.T) {

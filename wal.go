@@ -338,6 +338,9 @@ func (w *wal) WriteFrom(r encoding.BinaryMarshaler) (uint64, error) {
 }
 
 func (w *wal) Truncate(_seqNum uint64) error {
+	defer func() {
+		w.seqNum = _seqNum - 1
+	}()
 	for i := len(w.segments) - 1; i >= 0; i-- {
 		segpos := w.segments[i]
 		if segpos.seqNum < _seqNum {
@@ -357,7 +360,6 @@ func (w *wal) Truncate(_seqNum uint64) error {
 			return fmt.Errorf("can't remove segment file: %w", err)
 		}
 	}
-	w.seqNum = _seqNum - 1
 	return nil
 }
 
