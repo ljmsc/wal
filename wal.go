@@ -106,7 +106,7 @@ func (w *wal) scan() error {
 		}
 		split := strings.Split(segName, "_")
 		// parse the last part of the segment name as sequence number
-		seqNum, err := strconv.ParseUint(split[len(split)-1], 10, 64)
+		seqNum, err := strconv.ParseUint(split[len(split)-1], 10, 64) // nolint
 		if err != nil {
 			return fmt.Errorf("can't parse seq num from filename: %w", err)
 		}

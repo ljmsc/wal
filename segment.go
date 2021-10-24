@@ -8,6 +8,10 @@ import (
 	"os"
 )
 
+const (
+	segmentPerm = 0600
+)
+
 var (
 	errMaxSize     = fmt.Errorf("segment already reached maximum size")
 	errOffsetBlock = fmt.Errorf("offsetByPos must be start of block")
@@ -31,7 +35,7 @@ func openSegment(_name string, _split int64, _size int64) (*segment, error) {
 	}
 
 	var err error
-	s.file, err = os.OpenFile(_name, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0600)
+	s.file, err = os.OpenFile(_name, os.O_RDWR|os.O_CREATE|os.O_APPEND, segmentPerm)
 	if err != nil {
 		return nil, fmt.Errorf("can't open segment file: %w", err)
 	}
@@ -169,8 +173,7 @@ func (s *segment) readPage(_pageData []byte, _offset int64) (int64, error) {
 		}
 	}
 
-	retN := int64(copy(_pageData, pData[pDelta:n]))
-	return retN, err
+	return int64(copy(_pageData, pData[pDelta:n])), err
 }
 
 // readAt reads the record from _offset
