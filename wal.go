@@ -39,7 +39,7 @@ type Wal interface {
 	Write(_data []byte) (uint64, error)
 	// WriteFrom extracts data from the given object and writes it on disk. it returns the new sequence number
 	WriteFrom(r encoding.BinaryMarshaler) (uint64, error)
-	// Truncate dumps all records whose sequence number is greater or equal to offsetBy
+	// Truncate dumps all records whose sequence number is greater or equal to offsetByPos
 	Truncate(_seqNum uint64) error
 	// Sync flushes changes to persistent storage and returns the latest safe sequence number
 	Sync() (uint64, error)
@@ -187,14 +187,13 @@ func (w *wal) Read(_seqNum uint64) ([]byte, error) {
 		}
 		return nil, err
 	}
-	seg := segpos.segment
-	offset, err := seg.offsetBy((_seqNum - segpos.seqNum) + 1)
+	offset, err := segpos.offsetBySeqNum(_seqNum)
 	if err != nil {
 		return nil, err
 	}
 
 	_r := record{}
-	if err := seg.readAt(&_r, offset); err != nil {
+	if err := segpos.segment.readAt(&_r, offset); err != nil {
 		return nil, err
 	}
 
@@ -258,13 +257,13 @@ func (w *wal) ReadFrom(_seqNum uint64, _n int64) (<-chan Envelope, error) {
 				out <- Envelope{Err: err}
 				return
 			}
-			seg := segpos.segment
-			offset, err := seg.offsetBy((currSeqNum - segpos.seqNum) + 1)
+
+			offset, err := segpos.offsetBySeqNum(currSeqNum)
 			if err != nil {
 				out <- Envelope{Err: err}
 				return
 			}
-			env, err := seg.readFrom(offset, _n)
+			env, err := segpos.segment.readFrom(offset, _n)
 			if err != nil {
 				out <- Envelope{Err: err}
 				return
@@ -341,21 +340,24 @@ func (w *wal) WriteFrom(r encoding.BinaryMarshaler) (uint64, error) {
 func (w *wal) Truncate(_seqNum uint64) error {
 	for i := len(w.segments) - 1; i >= 0; i-- {
 		segpos := w.segments[i]
-		if segpos.seqNum >= _seqNum {
-			w.segments = w.segments[:len(w.segments)-1]
-			_ = segpos.segment.close()
-			err := os.Remove(segpos.segment.file.Name())
+		if segpos.seqNum < _seqNum {
+			offset, err := segpos.offsetBySeqNum(_seqNum)
 			if err != nil {
-				return fmt.Errorf("can't remove segment file: %w", err)
+				return err
 			}
-			continue
+			return segpos.segment.truncate(offset)
 		}
-		offset, err := segpos.segment.offsetBy(_seqNum - segpos.seqNum)
+
+		// remove segment reference
+		w.segments = w.segments[:len(w.segments)-1]
+		_ = segpos.segment.close()
+		// delete the segment since all elements will be truncated
+		err := os.Remove(segpos.segment.file.Name())
 		if err != nil {
-			return err
+			return fmt.Errorf("can't remove segment file: %w", err)
 		}
-		return segpos.segment.truncate(offset)
 	}
+	w.seqNum = _seqNum - 1
 	return nil
 }
 
