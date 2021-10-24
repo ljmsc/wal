@@ -8,9 +8,13 @@ import (
 	"os"
 )
 
+const (
+	segmentPerm = 0600
+)
+
 var (
 	errMaxSize     = fmt.Errorf("segment already reached maximum size")
-	errOffsetBlock = fmt.Errorf("offsetBy must be start of block")
+	errOffsetBlock = fmt.Errorf("offsetByPos must be start of block")
 )
 
 type segment struct {
@@ -31,7 +35,7 @@ func openSegment(_name string, _split int64, _size int64) (*segment, error) {
 	}
 
 	var err error
-	s.file, err = os.OpenFile(_name, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0600)
+	s.file, err = os.OpenFile(_name, os.O_RDWR|os.O_CREATE|os.O_APPEND, segmentPerm)
 	if err != nil {
 		return nil, fmt.Errorf("can't open segment file: %w", err)
 	}
@@ -184,7 +188,7 @@ func (s *segment) readAt(_record *record, _offset int64) error {
 
 	// can't read header as record
 	if _offset == 0 {
-		return fmt.Errorf("can't read header as offsetBy")
+		return fmt.Errorf("can't read header as offsetByPos")
 	}
 	pData := make([]byte, s.header.Page)
 	n, err := s.readPage(pData, _offset)
@@ -310,7 +314,7 @@ func (s *segment) write(_record record) (int64, error) {
 		return 0, errMaxSize
 	}
 
-	// get current size as offsetBy for written data
+	// get current size as offsetByPos for written data
 	wOff, err := s.size()
 	if err != nil {
 		return 0, err
@@ -351,8 +355,8 @@ func (s *segment) sync() error {
 	return nil
 }
 
-// offsetBy returns the offsetBy of the record on position _pos. _pos must be > 0
-func (s *segment) offsetBy(_pos uint64) (int64, error) {
+// offsetByPos returns the offset of the record on position _pos. _pos must be > 0
+func (s *segment) offsetByPos(_pos uint64) (int64, error) {
 	if _pos <= 0 {
 		return 0, fmt.Errorf("invalid position: %d", _pos)
 	}
